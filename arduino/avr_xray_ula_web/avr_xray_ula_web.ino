@@ -1,18 +1,19 @@
 #include <Arduino.h>
 #include <EEPROM.h>
-#include <avr/interrupt.h>
+#include <avr/io.h>
 #include <avr/pgmspace.h>
 
-const uint8_t PROTOCOL_VERSION = 1;
-const uint32_t BAUD_RATE = 115200;
-const uint16_t SAMPLE_INTERVAL_MS = 100;
-const uint16_t DEBOUNCE_MS = 40;
-
+// Hardware map used by the AVR X-Ray ULA monitor.
 const uint8_t LED_CARRY_PIN = 2;
 const uint8_t LED_BIT_PINS[4] = {3, 4, 5, 6};  // b3, b2, b1, b0
 const uint8_t BUTTON_BIT_PINS[4] = {7, 8, 9, 10};  // b3, b2, b1, b0
 const uint8_t BUTTON_OK_PIN = 11;
-const uint8_t ADC_PIN = A0;
+const uint8_t POTENTIOMETER_PIN = A0;
+
+const unsigned long SNAPSHOT_INTERVAL_MS = 100;
+const unsigned long DEBOUNCE_MS = 40;
+const unsigned long LED_OVERRIDE_MS = 1500;
+const uint8_t PROTOCOL_VERSION = 1;
 
 const uint8_t FLAG_ZERO = 1 << 0;
 const uint8_t FLAG_CARRY = 1 << 1;
@@ -20,26 +21,24 @@ const uint8_t FLAG_NEGATIVE = 1 << 2;
 const uint8_t FLAG_OVERFLOW = 1 << 3;
 const uint8_t FLAG_DIV_ZERO = 1 << 4;
 
-const uint8_t EEPROM_SIGNATURE = 0xA5;
-const uint8_t EEPROM_RECORD_COUNT = 32;
+const uint8_t EEPROM_MAGIC = 0xA5;
 const uint8_t EEPROM_RECORD_SIZE = 5;
-const uint16_t EEPROM_HEADER_SIZE = 4;
-
-const uint16_t FLASH_DUMP_SIZE = 64;
+const uint8_t EEPROM_RECORD_COUNT = 32;
 const uint16_t EEPROM_DUMP_SIZE = 192;
+const uint8_t FLASH_DUMP_SIZE = 64;
 
 enum InputStage : uint8_t {
-  STAGE_A = 0,
-  STAGE_B = 1,
-  STAGE_OPERATION = 2,
-  STAGE_RESULT = 3,
+  STAGE_INPUT_A = 0,
+  STAGE_INPUT_B = 1,
+  STAGE_INPUT_OPERATION = 2,
+  STAGE_RESULT = 3
 };
 
 struct DebouncedButton {
   uint8_t pin;
   uint8_t stableState;
   uint8_t lastRawState;
-  uint32_t changedAt;
+  unsigned long changedAt;
 };
 
 volatile uint8_t ula_probe[128];
@@ -53,33 +52,40 @@ uint8_t operationCode = 0;
 uint8_t resultValue = 0;
 uint8_t ulaFlags = 0;
 uint8_t currentInput = 0;
-InputStage inputStage = STAGE_A;
+InputStage inputStage = STAGE_INPUT_A;
 
-uint16_t snapshotSequence = 0;
-uint32_t nextSnapshotAt = 0;
+uint8_t probeHistoryIndex = 0;
+uint8_t operationSequence = 0;
+uint32_t snapshotSequence = 0;
+unsigned long lastSnapshotAt = 0;
 
-char commandBuffer[48];
+char commandBuffer[40];
 uint8_t commandLength = 0;
 
 bool ledOverrideActive = false;
-uint8_t ledOverrideBits = 0;
-uint32_t ledOverrideUntil = 0;
+uint8_t ledOverrideValue = 0;
+bool ledOverrideCarry = false;
+unsigned long ledOverrideUntil = 0;
 
 void setupButton(DebouncedButton &button, uint8_t pin);
 void processButton(DebouncedButton &button, void (*onPress)());
-void processSerialCommands();
-void handleCommand();
-void onBit3Pressed();
-void onBit2Pressed();
-void onBit1Pressed();
-void onBit0Pressed();
-void onOkPressed();
+void processButtons();
+void pressBit3();
+void pressBit2();
+void pressBit1();
+void pressBit0();
+void pressOk();
 void toggleInputBit(uint8_t bit);
 void executeUla();
-void updateLeds();
-void writeHistoryRecord();
-void ensureEepromHeader();
+void writeLeds(uint8_t value, bool carry);
+void writeCurrentStageLeds();
+void setLedOverride(const char *target, bool enabled);
+void clearLedOverride();
 void updateProbe(uint16_t adcValue);
+void appendProbeHistory();
+void persistOperation();
+void processSerialCommands();
+void handleCommand();
 void sendHello();
 void sendSnapshot(uint16_t adcValue);
 void sendStaticMemory();
@@ -87,46 +93,44 @@ void printHexByte(uint8_t value);
 void printProbeHex();
 void printEepromHex();
 void printFlashHex();
-void handleLedCommand(char *target, uint8_t level);
 
 void setup() {
-  Serial.begin(BAUD_RATE);
+  Serial.begin(115200);
 
   pinMode(LED_CARRY_PIN, OUTPUT);
   for (uint8_t index = 0; index < 4; index++) {
     pinMode(LED_BIT_PINS[index], OUTPUT);
+  }
+
+  for (uint8_t index = 0; index < 4; index++) {
     setupButton(bitButtons[index], BUTTON_BIT_PINS[index]);
   }
   setupButton(okButton, BUTTON_OK_PIN);
 
-  ensureEepromHeader();
-  executeUla();
-  updateProbe(analogRead(ADC_PIN));
-  updateLeds();
+  for (uint8_t index = 0; index < sizeof(ula_probe); index++) {
+    ula_probe[index] = 0;
+  }
+
+  writeLeds(0, false);
   sendHello();
   sendStaticMemory();
 }
 
 void loop() {
   processSerialCommands();
-
-  processButton(bitButtons[0], onBit3Pressed);
-  processButton(bitButtons[1], onBit2Pressed);
-  processButton(bitButtons[2], onBit1Pressed);
-  processButton(bitButtons[3], onBit0Pressed);
-  processButton(okButton, onOkPressed);
+  processButtons();
 
   if (ledOverrideActive && millis() > ledOverrideUntil) {
-    ledOverrideActive = false;
+    clearLedOverride();
   }
-  updateLeds();
 
-  const uint32_t now = millis();
-  if (now >= nextSnapshotAt) {
-    const uint16_t adcValue = analogRead(ADC_PIN);
-    updateProbe(adcValue);
+  const uint16_t adcValue = analogRead(POTENTIOMETER_PIN);
+  updateProbe(adcValue);
+
+  const unsigned long now = millis();
+  if (now - lastSnapshotAt >= SNAPSHOT_INTERVAL_MS) {
+    lastSnapshotAt = now;
     sendSnapshot(adcValue);
-    nextSnapshotAt = now + SAMPLE_INTERVAL_MS;
   }
 }
 
@@ -141,170 +145,212 @@ void setupButton(DebouncedButton &button, uint8_t pin) {
 
 void processButton(DebouncedButton &button, void (*onPress)()) {
   const uint8_t rawState = digitalRead(button.pin);
-  const uint32_t now = millis();
+  const unsigned long now = millis();
 
   if (rawState != button.lastRawState) {
     button.lastRawState = rawState;
     button.changedAt = now;
   }
 
-  if (rawState != button.stableState && now - button.changedAt >= DEBOUNCE_MS) {
+  if (
+    rawState != button.stableState &&
+    now - button.changedAt >= DEBOUNCE_MS
+  ) {
     button.stableState = rawState;
+
+    // INPUT_PULLUP: a pressed button is electrically LOW.
     if (button.stableState == LOW) {
       onPress();
     }
   }
 }
 
-void onBit3Pressed() { toggleInputBit(3); }
-void onBit2Pressed() { toggleInputBit(2); }
-void onBit1Pressed() { toggleInputBit(1); }
-void onBit0Pressed() { toggleInputBit(0); }
+void processButtons() {
+  processButton(bitButtons[0], pressBit3);
+  processButton(bitButtons[1], pressBit2);
+  processButton(bitButtons[2], pressBit1);
+  processButton(bitButtons[3], pressBit0);
+  processButton(okButton, pressOk);
+}
+
+void pressBit3() {
+  toggleInputBit(3);
+}
+
+void pressBit2() {
+  toggleInputBit(2);
+}
+
+void pressBit1() {
+  toggleInputBit(1);
+}
+
+void pressBit0() {
+  toggleInputBit(0);
+}
 
 void toggleInputBit(uint8_t bit) {
   if (inputStage == STAGE_RESULT) {
-    inputStage = STAGE_A;
-    currentInput = 0;
+    return;
   }
+
   currentInput ^= (1 << bit);
-  currentInput &= 0x0F;
+  writeLeds(currentInput, false);
 }
 
-void onOkPressed() {
-  if (inputStage == STAGE_A) {
+void pressOk() {
+  if (inputStage == STAGE_INPUT_A) {
     operandA = currentInput & 0x0F;
     currentInput = 0;
-    inputStage = STAGE_B;
+    inputStage = STAGE_INPUT_B;
+    writeLeds(0, false);
     return;
   }
 
-  if (inputStage == STAGE_B) {
+  if (inputStage == STAGE_INPUT_B) {
     operandB = currentInput & 0x0F;
     currentInput = 0;
-    inputStage = STAGE_OPERATION;
+    inputStage = STAGE_INPUT_OPERATION;
+    writeLeds(0, false);
     return;
   }
 
-  if (inputStage == STAGE_OPERATION) {
+  if (inputStage == STAGE_INPUT_OPERATION) {
     operationCode = currentInput & 0x07;
     currentInput = 0;
     executeUla();
-    writeHistoryRecord();
     inputStage = STAGE_RESULT;
+    writeLeds(resultValue, (ulaFlags & FLAG_CARRY) != 0);
+
+    // EEPROM writes only happen here, after the operation is confirmed.
+    persistOperation();
+    appendProbeHistory();
     return;
   }
 
+  inputStage = STAGE_INPUT_A;
   currentInput = 0;
-  inputStage = STAGE_A;
+  writeLeds(0, false);
 }
 
 void executeUla() {
-  const uint8_t a = operandA & 0x0F;
-  const uint8_t b = operandB & 0x0F;
-  uint16_t wideResult = 0;
-  uint8_t flags = 0;
+  ulaFlags = 0;
+  resultValue = 0;
 
-  switch (operationCode & 0x07) {
+  switch (operationCode) {
     case 0:
-      wideResult = a & b;
+      resultValue = operandA & operandB;
       break;
+
     case 1:
-      wideResult = a | b;
+      resultValue = operandA | operandB;
       break;
+
     case 2:
-      wideResult = (~b) & 0x0F;
+      resultValue = (~operandB) & 0x0F;
       break;
+
     case 3:
-      wideResult = a ^ b;
+      resultValue = operandA ^ operandB;
       break;
-    case 4:
-      wideResult = a + b;
-      if (wideResult > 0x0F) flags |= FLAG_CARRY;
+
+    case 4: {
+      const uint8_t total = operandA + operandB;
+      if (total > 15) {
+        ulaFlags |= FLAG_CARRY;
+      }
+      resultValue = total & 0x0F;
       break;
+    }
+
     case 5:
-      wideResult = (a - b) & 0x0F;
-      if (a < b) flags |= FLAG_CARRY;
+      if (operandA < operandB) {
+        ulaFlags |= FLAG_CARRY;
+      }
+      resultValue = (operandA - operandB) & 0x0F;
       break;
-    case 6:
-      wideResult = a * b;
-      if (wideResult > 0x0F) flags |= FLAG_OVERFLOW;
+
+    case 6: {
+      const uint16_t product = operandA * operandB;
+      if (product > 15) {
+        ulaFlags |= FLAG_CARRY;
+        ulaFlags |= FLAG_OVERFLOW;
+      }
+      resultValue = product & 0x0F;
       break;
+    }
+
     case 7:
-      if (b == 0) {
-        wideResult = 0;
-        flags |= FLAG_DIV_ZERO;
+      if (operandB == 0) {
+        ulaFlags |= FLAG_DIV_ZERO;
+        resultValue = 0;
       } else {
-        wideResult = a / b;
+        resultValue = operandA / operandB;
       }
       break;
   }
 
-  resultValue = wideResult & 0x0F;
-  if (resultValue == 0) flags |= FLAG_ZERO;
-  if (resultValue & 0x08) flags |= FLAG_NEGATIVE;
-  ulaFlags = flags;
+  if (resultValue == 0) {
+    ulaFlags |= FLAG_ZERO;
+  }
+  if (resultValue & 0x08) {
+    ulaFlags |= FLAG_NEGATIVE;
+  }
 }
 
-void updateLeds() {
-  if (ledOverrideActive) {
-    digitalWrite(LED_CARRY_PIN, (ledOverrideBits & 0x10) ? HIGH : LOW);
-    digitalWrite(LED_BIT_PINS[0], (ledOverrideBits & 0x08) ? HIGH : LOW);
-    digitalWrite(LED_BIT_PINS[1], (ledOverrideBits & 0x04) ? HIGH : LOW);
-    digitalWrite(LED_BIT_PINS[2], (ledOverrideBits & 0x02) ? HIGH : LOW);
-    digitalWrite(LED_BIT_PINS[3], (ledOverrideBits & 0x01) ? HIGH : LOW);
+void writeLeds(uint8_t value, bool carry) {
+  digitalWrite(LED_CARRY_PIN, carry ? HIGH : LOW);
+  digitalWrite(LED_BIT_PINS[0], (value >> 3) & 1);
+  digitalWrite(LED_BIT_PINS[1], (value >> 2) & 1);
+  digitalWrite(LED_BIT_PINS[2], (value >> 1) & 1);
+  digitalWrite(LED_BIT_PINS[3], value & 1);
+}
+
+void writeCurrentStageLeds() {
+  if (inputStage == STAGE_RESULT) {
+    writeLeds(resultValue, (ulaFlags & FLAG_CARRY) != 0);
+  } else {
+    writeLeds(currentInput, false);
+  }
+}
+
+void setLedOverride(const char *target, bool enabled) {
+  if (!ledOverrideActive) {
+    ledOverrideValue = (inputStage == STAGE_RESULT) ? resultValue : currentInput;
+    ledOverrideCarry = (inputStage == STAGE_RESULT && (ulaFlags & FLAG_CARRY) != 0);
+  }
+
+  if (strcmp(target, "CARRY") == 0) {
+    ledOverrideCarry = enabled;
+  } else if (strcmp(target, "B3") == 0) {
+    bitWrite(ledOverrideValue, 3, enabled);
+  } else if (strcmp(target, "B2") == 0) {
+    bitWrite(ledOverrideValue, 2, enabled);
+  } else if (strcmp(target, "B1") == 0) {
+    bitWrite(ledOverrideValue, 1, enabled);
+  } else if (strcmp(target, "B0") == 0) {
+    bitWrite(ledOverrideValue, 0, enabled);
+  } else {
     return;
   }
 
-  digitalWrite(LED_CARRY_PIN, (ulaFlags & FLAG_CARRY) ? HIGH : LOW);
-  digitalWrite(LED_BIT_PINS[0], (resultValue >> 3) & 1);
-  digitalWrite(LED_BIT_PINS[1], (resultValue >> 2) & 1);
-  digitalWrite(LED_BIT_PINS[2], (resultValue >> 1) & 1);
-  digitalWrite(LED_BIT_PINS[3], resultValue & 1);
+  ledOverrideActive = true;
+  ledOverrideUntil = millis() + LED_OVERRIDE_MS;
+  writeLeds(ledOverrideValue, ledOverrideCarry);
 }
 
-void ensureEepromHeader() {
-  if (
-    EEPROM.read(0) != EEPROM_SIGNATURE ||
-    EEPROM.read(3) != EEPROM_RECORD_SIZE ||
-    EEPROM.read(1) >= EEPROM_RECORD_COUNT ||
-    EEPROM.read(2) > EEPROM_RECORD_COUNT
-  ) {
-    EEPROM.update(0, EEPROM_SIGNATURE);
-    EEPROM.update(1, 0);
-    EEPROM.update(2, 0);
-    EEPROM.update(3, EEPROM_RECORD_SIZE);
-  }
-}
-
-void writeHistoryRecord() {
-  ensureEepromHeader();
-
-  uint8_t writeIndex = EEPROM.read(1) % EEPROM_RECORD_COUNT;
-  uint8_t count = EEPROM.read(2);
-  if (count > EEPROM_RECORD_COUNT) count = 0;
-
-  const uint16_t base = EEPROM_HEADER_SIZE + writeIndex * EEPROM_RECORD_SIZE;
-  EEPROM.update(base + 0, operandA & 0x0F);
-  EEPROM.update(base + 1, operandB & 0x0F);
-  EEPROM.update(base + 2, operationCode & 0x07);
-  EEPROM.update(base + 3, resultValue & 0x0F);
-  EEPROM.update(base + 4, ulaFlags & 0x1F);
-
-  writeIndex = (writeIndex + 1) % EEPROM_RECORD_COUNT;
-  if (count < EEPROM_RECORD_COUNT) count++;
-
-  EEPROM.update(1, writeIndex);
-  EEPROM.update(2, count);
+void clearLedOverride() {
+  ledOverrideActive = false;
+  writeCurrentStageLeds();
 }
 
 void updateProbe(uint16_t adcValue) {
-  const uint8_t sregValue = SREG;
   ula_probe[0] = operandA;
   ula_probe[1] = operandB;
   ula_probe[2] = operationCode;
   ula_probe[3] = resultValue;
   ula_probe[4] = ulaFlags;
-  ula_probe[5] = sregValue;
+  ula_probe[5] = SREG;
   ula_probe[6] = PORTB;
   ula_probe[7] = PORTC;
   ula_probe[8] = PORTD;
@@ -314,17 +360,53 @@ void updateProbe(uint16_t adcValue) {
   ula_probe[12] = TCNT0;
   ula_probe[13] = TCNT2;
   ula_probe[14] = adcValue & 0xFF;
-  ula_probe[15] = (adcValue >> 8) & 0x03;
+  ula_probe[15] = (adcValue >> 8) & 0xFF;
+}
 
-  const uint8_t slot = (snapshotSequence / 10) % 16;
-  const uint8_t base = 16 + slot * 7;
+void appendProbeHistory() {
+  const uint8_t base = 16 + probeHistoryIndex * 7;
   ula_probe[base + 0] = operandA;
   ula_probe[base + 1] = operandB;
   ula_probe[base + 2] = operationCode;
   ula_probe[base + 3] = resultValue;
   ula_probe[base + 4] = ulaFlags;
-  ula_probe[base + 5] = sregValue;
-  ula_probe[base + 6] = snapshotSequence & 0xFF;
+  ula_probe[base + 5] = SREG;
+  ula_probe[base + 6] = operationSequence++;
+  probeHistoryIndex = (probeHistoryIndex + 1) % 16;
+}
+
+void persistOperation() {
+  uint8_t writeIndex = EEPROM.read(1);
+  uint8_t count = EEPROM.read(2);
+  const bool validHeader = (
+    EEPROM.read(0) == EEPROM_MAGIC &&
+    EEPROM.read(3) == EEPROM_RECORD_SIZE &&
+    writeIndex < EEPROM_RECORD_COUNT &&
+    count <= EEPROM_RECORD_COUNT
+  );
+
+  if (!validHeader) {
+    writeIndex = 0;
+    count = 0;
+    EEPROM.update(0, EEPROM_MAGIC);
+    EEPROM.update(1, writeIndex);
+    EEPROM.update(2, count);
+    EEPROM.update(3, EEPROM_RECORD_SIZE);
+  }
+
+  const uint16_t base = 4 + writeIndex * EEPROM_RECORD_SIZE;
+  EEPROM.update(base + 0, operandA);
+  EEPROM.update(base + 1, operandB);
+  EEPROM.update(base + 2, operationCode);
+  EEPROM.update(base + 3, resultValue);
+  EEPROM.update(base + 4, ulaFlags);
+
+  writeIndex = (writeIndex + 1) % EEPROM_RECORD_COUNT;
+  if (count < EEPROM_RECORD_COUNT) {
+    count++;
+  }
+  EEPROM.update(1, writeIndex);
+  EEPROM.update(2, count);
 }
 
 void processSerialCommands() {
@@ -355,66 +437,55 @@ void handleCommand() {
   }
 
   if (strcmp(commandBuffer, "OK") == 0) {
-    onOkPressed();
+    pressOk();
     return;
   }
 
   if (strncmp(commandBuffer, "INPUT:", 6) == 0) {
-    currentInput = atoi(commandBuffer + 6) & 0x0F;
-    if (inputStage == STAGE_RESULT) {
-      inputStage = STAGE_A;
+    if (inputStage != STAGE_RESULT) {
+      currentInput = atoi(commandBuffer + 6) & 0x0F;
+      writeLeds(currentInput, false);
     }
     return;
   }
 
   if (strncmp(commandBuffer, "PRESS:", 6) == 0) {
-    char *target = commandBuffer + 6;
-    if (strcmp(target, "B3") == 0) toggleInputBit(3);
-    else if (strcmp(target, "B2") == 0) toggleInputBit(2);
-    else if (strcmp(target, "B1") == 0) toggleInputBit(1);
-    else if (strcmp(target, "B0") == 0) toggleInputBit(0);
-    else if (strcmp(target, "OK") == 0) onOkPressed();
+    const char *target = commandBuffer + 6;
+    if (strcmp(target, "B3") == 0) {
+      pressBit3();
+    } else if (strcmp(target, "B2") == 0) {
+      pressBit2();
+    } else if (strcmp(target, "B1") == 0) {
+      pressBit1();
+    } else if (strcmp(target, "B0") == 0) {
+      pressBit0();
+    } else if (strcmp(target, "OK") == 0) {
+      pressOk();
+    }
     return;
   }
 
-  if (strncmp(commandBuffer, "LED_AUTO", 8) == 0) {
-    ledOverrideActive = false;
+  if (strcmp(commandBuffer, "LED_AUTO") == 0) {
+    clearLedOverride();
     return;
   }
 
   if (strncmp(commandBuffer, "LED:", 4) == 0) {
     char *target = commandBuffer + 4;
     char *separator = strchr(target, ':');
-    if (separator == NULL) return;
+    if (separator == NULL) {
+      return;
+    }
     *separator = '\0';
-    handleLedCommand(target, atoi(separator + 1) ? 1 : 0);
+    setLedOverride(target, atoi(separator + 1) != 0);
     return;
   }
-}
-
-void handleLedCommand(char *target, uint8_t level) {
-  if (!ledOverrideActive) {
-    ledOverrideBits = ((ulaFlags & FLAG_CARRY) ? 0x10 : 0x00) | (resultValue & 0x0F);
-  }
-
-  uint8_t mask = 0;
-  if (strcmp(target, "CARRY") == 0) mask = 0x10;
-  else if (strcmp(target, "B3") == 0) mask = 0x08;
-  else if (strcmp(target, "B2") == 0) mask = 0x04;
-  else if (strcmp(target, "B1") == 0) mask = 0x02;
-  else if (strcmp(target, "B0") == 0) mask = 0x01;
-  else return;
-
-  if (level) ledOverrideBits |= mask;
-  else ledOverrideBits &= ~mask;
-  ledOverrideActive = true;
-  ledOverrideUntil = millis() + 1500;
 }
 
 void sendHello() {
   Serial.print(F("{\"type\":\"hello\",\"protocol\":"));
   Serial.print(PROTOCOL_VERSION);
-  Serial.print(F(",\"device\":\"AVR X-Ray ULA Web\",\"firmware\":\"2.0.0\",\"sample_hz\":10}"));
+  Serial.print(F(",\"device\":\"AVR X-Ray ULA Web\",\"firmware\":\"2.1.0\",\"sample_hz\":10}"));
   Serial.println();
 }
 
@@ -528,13 +599,13 @@ void printProbeHex() {
 }
 
 void printEepromHex() {
-  for (uint16_t address = 0; address < EEPROM_DUMP_SIZE; address++) {
-    printHexByte(EEPROM.read(address));
+  for (uint16_t index = 0; index < EEPROM_DUMP_SIZE; index++) {
+    printHexByte(EEPROM.read(index));
   }
 }
 
 void printFlashHex() {
-  for (uint16_t address = 0; address < FLASH_DUMP_SIZE; address++) {
-    printHexByte(pgm_read_byte_near(address));
+  for (uint8_t index = 0; index < FLASH_DUMP_SIZE; index++) {
+    printHexByte(pgm_read_byte_near(index));
   }
 }

@@ -9,7 +9,7 @@ Encoding: ASCII JSON Lines from Arduino to web; newline-terminated text commands
 ### `hello`
 
 ```json
-{"type":"hello","protocol":1,"device":"AVR X-Ray ULA Web","firmware":"2.0.0","sample_hz":10}
+{"type":"hello","protocol":1,"device":"AVR X-Ray ULA Web","firmware":"2.1.0","sample_hz":10}
 ```
 
 ### `snapshot`
