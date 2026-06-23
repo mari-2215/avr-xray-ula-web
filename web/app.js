@@ -1,0 +1,554 @@
+const PROTOCOL_VERSION = 1;
+const COPY = {
+  pt: {
+    statusSim: "Simulador ativo",
+    statusPaused: "Simulador pausado",
+    serialUnavailable: "Web Serial indisponivel neste navegador",
+    serialConnected: "Serial conectado em 115200",
+    connectFailed: "Falha ao conectar",
+    serialStopped: "Serial interrompido",
+    ignoredLine: "Linha ignorada",
+    brandEyebrow: "Arduino Uno / ATmega328P",
+    connect: "Conectar",
+    simulator: "Simulador",
+    aluFlow: "Fluxo da ULA",
+    sendSignal: "Enviar sinal",
+    sendInput: "Enviar input",
+    physicalSignals: "Sinais fisicos",
+    ledsButtons: "LEDs e botoes",
+    ledPins: "LEDs D2-D6",
+    buttonPins: "Botoes D7-D11",
+    liveDump: "Dump ao vivo",
+    registers: "Registradores",
+    staticMemory: "Memoria estatica",
+    waitingStatic: "Aguardando GET_STATIC...",
+    selectedBit: "Alternar bit",
+    ledCommand: "Enviar comando para LED",
+    stages: ["Entrada do operando A", "Entrada do operando B", "Selecao da operacao", "Resultado"],
+    ops: ["AND", "OR", "NOT B", "XOR", "ADD", "SUB", "MUL", "DIV"],
+    sramHistory: "Historico circular da ULA, slot",
+    sramDefault: "Byte instrumentado.",
+  },
+  en: {
+    statusSim: "Simulator active",
+    statusPaused: "Simulator paused",
+    serialUnavailable: "Web Serial is unavailable in this browser",
+    serialConnected: "Serial connected at 115200",
+    connectFailed: "Connection failed",
+    serialStopped: "Serial stopped",
+    ignoredLine: "Ignored line",
+    brandEyebrow: "Arduino Uno / ATmega328P",
+    connect: "Connect",
+    simulator: "Simulator",
+    aluFlow: "ALU flow",
+    sendSignal: "Send signal",
+    sendInput: "Send input",
+    physicalSignals: "Physical signals",
+    ledsButtons: "LEDs and buttons",
+    ledPins: "LEDs D2-D6",
+    buttonPins: "Buttons D7-D11",
+    liveDump: "Live dump",
+    registers: "Registers",
+    staticMemory: "Static memory",
+    waitingStatic: "Waiting for GET_STATIC...",
+    selectedBit: "Toggle bit",
+    ledCommand: "Send command to LED",
+    stages: ["Operand A input", "Operand B input", "Operation selection", "Result"],
+    ops: ["AND", "OR", "NOT B", "XOR", "ADD", "SUB", "MUL", "DIV"],
+    sramHistory: "ALU circular history, slot",
+    sramDefault: "Instrumented byte.",
+  },
+};
+const OPS_BITS = ["000", "001", "010", "011", "100", "101", "110", "111"];
+const FLAGS = [
+  ["Z", 1],
+  ["C", 2],
+  ["N", 4],
+  ["V", 8],
+  ["D", 16],
+];
+const BUTTON_PINS = [
+  ["b3", 7],
+  ["b2", 8],
+  ["b1", 9],
+  ["b0", 10],
+  ["OK", 11],
+];
+const LED_NAMES = ["CARRY", "B3", "B2", "B1", "B0"];
+
+const $ = (id) => document.getElementById(id);
+const state = {
+  port: null,
+  reader: null,
+  writer: null,
+  buffer: "",
+  connected: false,
+  simulate: true,
+  selectedInput: 0,
+  selectedDump: "eeprom",
+  selectedCell: 0,
+  lang: "pt",
+  prevSram: new Uint8Array(128),
+  frame: null,
+  memory: { eeprom: new Uint8Array(192), flash: new Uint8Array(64) },
+};
+const t = (key) => COPY[state.lang][key];
+
+function bits(value, width) {
+  return (value >>> 0).toString(2).padStart(width, "0").slice(-width);
+}
+
+function hex(value, width = 2) {
+  return (value >>> 0).toString(16).toUpperCase().padStart(width, "0");
+}
+
+function bytesFromHex(text, size) {
+  const out = new Uint8Array(size);
+  for (let i = 0; i < size; i++) out[i] = parseInt(text.slice(i * 2, i * 2 + 2), 16) || 0;
+  return out;
+}
+
+function initUi() {
+  FLAGS.forEach(([name]) => {
+    const node = document.createElement("div");
+    node.className = "flag";
+    node.id = `flag${name}`;
+    node.textContent = name;
+    $("flagRow").appendChild(node);
+  });
+
+  [3, 2, 1, 0].forEach((bit) => {
+    const btn = document.createElement("button");
+    btn.className = "bit";
+    btn.textContent = `b${bit}`;
+    btn.title = `${t("selectedBit")} ${bit}`;
+    btn.addEventListener("click", () => {
+      state.selectedInput ^= 1 << bit;
+      renderInputNibble();
+    });
+    $("inputNibble").appendChild(btn);
+  });
+
+  LED_NAMES.forEach((name) => {
+    const led = document.createElement("button");
+    led.className = "led";
+    led.id = `led${name}`;
+    led.textContent = name;
+    led.title = `${t("ledCommand")} ${name}`;
+    led.addEventListener("click", () => {
+      const nextLevel = led.classList.contains("on") ? 0 : 1;
+      sendCommand(`LED:${name}:${nextLevel}`);
+    });
+    $("leds").appendChild(led);
+  });
+
+  BUTTON_PINS.forEach(([name, pin]) => {
+    const btn = document.createElement("div");
+    btn.className = "button-state";
+    btn.id = `button${pin}`;
+    btn.textContent = name;
+    $("buttons").appendChild(btn);
+  });
+
+  for (let i = 0; i < 128; i++) {
+    const cell = document.createElement("button");
+    cell.className = "cell";
+    cell.title = `ula_probe[${i}]`;
+    cell.addEventListener("click", () => {
+      state.selectedCell = i;
+      renderSram(state.frame?.sram || state.prevSram);
+    });
+    $("sramMap").appendChild(cell);
+  }
+
+  ["B", "C", "D"].forEach((port) => $("ports").appendChild(makePort(port)));
+
+  document.querySelectorAll(".tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      state.selectedDump = tab.dataset.dump;
+      document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === tab));
+      renderDump();
+    });
+  });
+
+  $("connectBtn").addEventListener("click", connectSerial);
+  $("simBtn").addEventListener("click", toggleSimulator);
+  $("langBtn").addEventListener("click", toggleLanguage);
+  $("sendInputBtn").addEventListener("click", () => sendCommand(`INPUT:${state.selectedInput}`));
+  $("okBtn").addEventListener("click", () => sendCommand("OK"));
+  $("staticBtn").addEventListener("click", () => sendCommand("GET_STATIC"));
+
+  renderInputNibble();
+  renderDump();
+  applyLanguage();
+}
+
+function makePort(port) {
+  const wrap = document.createElement("div");
+  wrap.className = "port-row";
+  wrap.innerHTML = `<strong>${port}</strong><div class="registers"></div>`;
+  ["DDR", "PORT", "PIN"].forEach((reg) => {
+    const row = document.createElement("div");
+    row.className = "reg";
+    row.id = `${reg}${port}`;
+    row.innerHTML = `<span>${reg}</span>`;
+    for (let i = 7; i >= 0; i--) {
+      const bit = document.createElement("span");
+      bit.className = "reg-bit";
+      bit.textContent = i;
+      row.appendChild(bit);
+    }
+    wrap.querySelector(".registers").appendChild(row);
+  });
+  return wrap;
+}
+
+async function connectSerial() {
+  if (!("serial" in navigator)) {
+    setStatus(t("serialUnavailable"), false);
+    return;
+  }
+
+  try {
+    state.port = await navigator.serial.requestPort();
+    await state.port.open({ baudRate: 115200 });
+    state.writer = state.port.writable.getWriter();
+    state.reader = state.port.readable.getReader();
+    state.connected = true;
+    state.simulate = false;
+    $("simBtn").classList.remove("active");
+    setStatus(t("serialConnected"), true);
+    readLoop();
+    sendCommand("GET_STATIC");
+  } catch (error) {
+    setStatus(`${t("connectFailed")}: ${error.message}`, false);
+  }
+}
+
+async function readLoop() {
+  const decoder = new TextDecoder();
+  while (state.connected && state.reader) {
+    try {
+      const { value, done } = await state.reader.read();
+      if (done) break;
+      state.buffer += decoder.decode(value, { stream: true });
+      const lines = state.buffer.split(/\r?\n/);
+      state.buffer = lines.pop() || "";
+      lines.filter(Boolean).forEach(handleLine);
+    } catch (error) {
+      setStatus(`${t("serialStopped")}: ${error.message}`, false);
+      state.connected = false;
+    }
+  }
+}
+
+function handleLine(line) {
+  try {
+    const payload = JSON.parse(line);
+    if (payload.protocol !== PROTOCOL_VERSION) return;
+    if (payload.type === "snapshot") renderFrame(normalizeSnapshot(payload));
+    if (payload.type === "memory") {
+      state.memory = {
+        eeprom: bytesFromHex(payload.eeprom || "", 192),
+        flash: bytesFromHex(payload.flash || "", 64),
+      };
+      renderDump();
+    }
+    if (payload.type === "hello") setStatus(`${payload.device} / fw ${payload.firmware}`, true);
+  } catch (error) {
+    setStatus(`${t("ignoredLine")}: ${error.message}`, false);
+  }
+}
+
+function normalizeSnapshot(payload) {
+  return {
+    seq: payload.seq || 0,
+    millis: payload.millis || 0,
+    ula: payload.ula || { a: 0, b: 0, op: 0, result: 0, flags: 0, stage: 0, input: 0 },
+    ports: payload.ports || {},
+    sreg: payload.sreg || 0,
+    timers: payload.timers || {},
+    adc: payload.adc || { a0: 0, millivolts: 0 },
+    sram: bytesFromHex(payload.sram || "", 128),
+  };
+}
+
+async function sendCommand(command) {
+  pulseCommand(command);
+  if (!state.writer) return;
+  const bytes = new TextEncoder().encode(`${command}\n`);
+  await state.writer.write(bytes);
+}
+
+function pulseCommand(command) {
+  setStatus(`TX ${command}`, state.connected || state.simulate);
+  document.body.animate(
+    [{ filter: "brightness(1)" }, { filter: "brightness(1.18)" }, { filter: "brightness(1)" }],
+    { duration: 220, easing: "ease-out" }
+  );
+}
+
+function toggleSimulator() {
+  state.simulate = !state.simulate;
+  $("simBtn").classList.toggle("active", state.simulate);
+  setStatus(state.simulate ? t("statusSim") : t("statusPaused"), state.simulate);
+}
+
+function toggleLanguage() {
+  state.lang = state.lang === "pt" ? "en" : "pt";
+  applyLanguage();
+  if (state.frame) renderFrame(state.frame);
+  renderDump();
+}
+
+function applyLanguage() {
+  document.documentElement.lang = state.lang === "pt" ? "pt-BR" : "en";
+  $("langBtn").textContent = state.lang === "pt" ? "EN" : "PT";
+  document.querySelectorAll("[data-i18n]").forEach((node) => {
+    node.textContent = t(node.dataset.i18n);
+  });
+  [...$("inputNibble").children].forEach((btn, index) => {
+    btn.title = `${t("selectedBit")} ${3 - index}`;
+  });
+  [...$("leds").children].forEach((led) => {
+    led.title = `${t("ledCommand")} ${led.textContent}`;
+  });
+  if (!state.connected) setStatus(state.simulate ? t("statusSim") : t("statusPaused"), state.simulate);
+}
+
+function renderFrame(frame) {
+  state.frame = frame;
+  const ula = frame.ula;
+  $("stageLabel").textContent = t("stages")[ula.stage] || `Stage ${ula.stage}`;
+  $("seqLabel").textContent = `seq ${String(frame.seq).padStart(4, "0")}`;
+  $("rateLabel").textContent = `${Math.round(frame.millis / 1000)} s`;
+  $("valueA").textContent = bits(ula.a, 4);
+  $("valueB").textContent = bits(ula.b, 4);
+  $("valueR").textContent = bits(ula.result, 4);
+  $("decA").textContent = ula.a;
+  $("decB").textContent = ula.b;
+  $("decR").textContent = ula.result;
+  $("opBits").textContent = OPS_BITS[ula.op] || "???";
+  $("opName").textContent = t("ops")[ula.op] || `OP ${ula.op}`;
+
+  FLAGS.forEach(([name, mask]) => $(`flag${name}`).classList.toggle("on", Boolean(ula.flags & mask)));
+  renderLeds(ula, frame.ports?.D?.port);
+  renderButtons(frame.ports?.B?.pin || 0, frame.ports?.D?.pin || 0);
+  renderPorts(frame.ports || {});
+  renderSram(frame.sram);
+}
+
+function renderInputNibble() {
+  [...$("inputNibble").children].forEach((btn, index) => {
+    const bit = 3 - index;
+    btn.classList.toggle("on", Boolean(state.selectedInput & (1 << bit)));
+  });
+}
+
+function renderLeds(ula, portD) {
+  if (Number.isInteger(portD)) {
+    $("ledCARRY").classList.toggle("on", Boolean(portD & (1 << 2)));
+    $("ledB3").classList.toggle("on", Boolean(portD & (1 << 3)));
+    $("ledB2").classList.toggle("on", Boolean(portD & (1 << 4)));
+    $("ledB1").classList.toggle("on", Boolean(portD & (1 << 5)));
+    $("ledB0").classList.toggle("on", Boolean(portD & (1 << 6)));
+    return;
+  }
+
+  $("ledCARRY").classList.toggle("on", Boolean(ula.flags & 2));
+  [3, 2, 1, 0].forEach((bit) => {
+    $(`ledB${bit}`).classList.toggle("on", Boolean(ula.result & (1 << bit)));
+  });
+}
+
+function renderButtons(pinB, pinD) {
+  const pinValues = { 7: pinD, 8: pinB, 9: pinB, 10: pinB, 11: pinB };
+  BUTTON_PINS.forEach(([, pin]) => {
+    const source = pinValues[pin] || 0;
+    const bit = pin === 7 ? 7 : pin - 8;
+    const releasedHigh = Boolean(source & (1 << bit));
+    $(`button${pin}`).classList.toggle("on", !releasedHigh);
+  });
+}
+
+function renderPorts(ports) {
+  ["B", "C", "D"].forEach((port) => {
+    const data = ports[port] || { ddr: 0, port: 0, pin: 0 };
+    renderRegister(`DDR${port}`, data.ddr);
+    renderRegister(`PORT${port}`, data.port);
+    renderRegister(`PIN${port}`, data.pin);
+  });
+}
+
+function renderRegister(id, value) {
+  const bitsNodes = [...$(id).querySelectorAll(".reg-bit")];
+  bitsNodes.forEach((node, index) => {
+    const bit = 7 - index;
+    node.classList.toggle("on", Boolean(value & (1 << bit)));
+  });
+}
+
+function renderSram(bytes) {
+  const cells = [...$("sramMap").children];
+  cells.forEach((cell, i) => {
+    const value = bytes[i] || 0;
+    const hot = value / 255;
+    const changed = state.prevSram[i] !== value;
+    cell.style.background = `rgb(${Math.round(34 + hot * 221)}, ${Math.round(51 + hot * 166)}, ${Math.round(58 + hot * 50)})`;
+    cell.classList.toggle("selected", i === state.selectedCell);
+    if (changed) {
+      cell.classList.remove("changed");
+      void cell.offsetWidth;
+      cell.classList.add("changed");
+    }
+  });
+  state.prevSram = bytes.slice();
+  const selected = bytes[state.selectedCell] || 0;
+  $("selectedByte").textContent = `0x${hex(selected)}`;
+  $("inspector").textContent =
+    `ula_probe[${state.selectedCell}] = ${selected} dec / 0x${hex(selected)} / ${bits(selected, 8)}\n` +
+    sramMeaning(state.selectedCell);
+}
+
+function sramMeaning(index) {
+  const known = state.lang === "pt"
+    ? {
+        0: "Operando A confirmado.",
+        1: "Operando B confirmado.",
+        2: "Codigo da operacao.",
+        3: "Resultado da ULA.",
+        4: "Flags D,V,N,C,Z.",
+        5: "Copia do SREG.",
+        6: "PORTB.",
+        7: "PORTC.",
+        8: "PORTD.",
+        9: "PINB.",
+        10: "PINC.",
+        11: "PIND.",
+        12: "TCNT0.",
+        13: "TCNT2.",
+        14: "ADC A0 low.",
+        15: "ADC A0 high.",
+      }
+    : {
+        0: "Confirmed operand A.",
+        1: "Confirmed operand B.",
+        2: "Operation code.",
+        3: "ALU result.",
+        4: "Flags D,V,N,C,Z.",
+        5: "SREG copy.",
+        6: "PORTB.",
+        7: "PORTC.",
+        8: "PORTD.",
+        9: "PINB.",
+        10: "PINC.",
+        11: "PIND.",
+        12: "TCNT0.",
+        13: "TCNT2.",
+        14: "ADC A0 low.",
+        15: "ADC A0 high.",
+      };
+  if (known[index]) return known[index];
+  if (index >= 16) return `${t("sramHistory")} ${Math.floor((index - 16) / 7)}.`;
+  return t("sramDefault");
+}
+
+function renderDump() {
+  const data = state.memory[state.selectedDump] || new Uint8Array();
+  const rows = [];
+  for (let i = 0; i < data.length; i += 16) {
+    const chunk = [...data.slice(i, i + 16)].map((v) => hex(v)).join(" ");
+    rows.push(`${hex(i, 4)}  ${chunk}`);
+  }
+  $("dumpView").textContent = rows.join("\n") || t("waitingStatic");
+}
+
+function setStatus(text, good) {
+  $("statusText").textContent = text;
+  $("statusPill").querySelector("i").style.background = good ? "var(--green)" : "var(--red)";
+  $("statusPill").querySelector("i").style.boxShadow = `0 0 18px ${good ? "var(--green)" : "var(--red)"}`;
+}
+
+function simulateTick() {
+  if (!state.simulate) return;
+  const t = Date.now();
+  const a = (t >> 8) & 15;
+  const b = (t >> 11) & 15;
+  const op = (t >> 10) & 7;
+  const result = executeOp(a, b, op);
+  const flags = makeFlags(a, b, op, result);
+  const sram = new Uint8Array(128);
+  sram[0] = a; sram[1] = b; sram[2] = op; sram[3] = result; sram[4] = flags; sram[5] = (t >> 5) & 255;
+  for (let i = 6; i < 128; i++) sram[i] = (Math.sin((t / 260) + i * 0.37) * 92 + 128) & 255;
+  renderFrame({
+    seq: Math.floor(t / 100) % 10000,
+    millis: t % 1000000,
+    ula: { a, b, op, result, flags, stage: (t >> 12) & 3, input: state.selectedInput },
+    ports: {
+      B: { ddr: 0x0f, port: result, pin: 0xff ^ (((t >> 9) & 1) << 0) },
+      C: { ddr: 0x00, port: 0x00, pin: (t >> 4) & 255 },
+      D: { ddr: 0x7c, port: (result << 3) & 255, pin: 0xff ^ (((t >> 8) & 1) << 7) },
+    },
+    sram,
+  });
+  if (Math.floor(t / 2000) % 2 === 0) {
+    state.memory.eeprom = state.memory.eeprom.map((_, i) => (i * 7 + (t >> 8)) & 255);
+    state.memory.flash = state.memory.flash.map((_, i) => (0x40 + i * 3) & 255);
+    renderDump();
+  }
+}
+
+function executeOp(a, b, op) {
+  if (op === 0) return a & b;
+  if (op === 1) return a | b;
+  if (op === 2) return (~b) & 15;
+  if (op === 3) return a ^ b;
+  if (op === 4) return (a + b) & 15;
+  if (op === 5) return (a - b) & 15;
+  if (op === 6) return (a * b) & 15;
+  if (op === 7) return b === 0 ? 0 : Math.floor(a / b) & 15;
+  return 0;
+}
+
+function makeFlags(a, b, op, result) {
+  let flags = result === 0 ? 1 : 0;
+  if (op === 4 && a + b > 15) flags |= 2;
+  if (op === 5 && a < b) flags |= 2;
+  if (result & 8) flags |= 4;
+  if (op === 6 && a * b > 15) flags |= 8;
+  if (op === 7 && b === 0) flags |= 16;
+  return flags;
+}
+
+function animateBus() {
+  const canvas = $("busCanvas");
+  const ctx = canvas.getContext("2d");
+  const resize = () => {
+    canvas.width = Math.floor(innerWidth * devicePixelRatio);
+    canvas.height = Math.floor(innerHeight * devicePixelRatio);
+  };
+  resize();
+  addEventListener("resize", resize);
+  function draw(now) {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.lineWidth = devicePixelRatio;
+    for (let y = 60; y < canvas.height; y += 58 * devicePixelRatio) {
+      ctx.beginPath();
+      ctx.strokeStyle = `rgba(0, 217, 255, ${0.06 + 0.05 * Math.sin(now / 600 + y)})`;
+      for (let x = -80 * devicePixelRatio; x < canvas.width + 80; x += 40 * devicePixelRatio) {
+        const yy = y + Math.sin(now / 500 + x / 120) * 8 * devicePixelRatio;
+        if (x < 0) ctx.moveTo(x, yy); else ctx.lineTo(x, yy);
+      }
+      ctx.stroke();
+      const pulseX = ((now / 2 + y) % (canvas.width + 180 * devicePixelRatio)) - 90 * devicePixelRatio;
+      ctx.fillStyle = "rgba(59, 238, 122, 0.55)";
+      ctx.fillRect(pulseX, y - 2 * devicePixelRatio, 26 * devicePixelRatio, 4 * devicePixelRatio);
+    }
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+}
+
+initUi();
+animateBus();
+setInterval(simulateTick, 100);

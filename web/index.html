@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AVR X-Ray From Zero</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <canvas id="busCanvas" aria-hidden="true"></canvas>
+
+    <main class="shell">
+      <header class="topbar">
+        <section class="brand">
+          <div class="mark">
+            <span></span><span></span><span></span><span></span>
+          </div>
+          <div>
+            <p class="eyebrow" data-i18n="brandEyebrow">Arduino Uno / ATmega328P</p>
+            <h1>AVR X-Ray From Zero</h1>
+          </div>
+        </section>
+
+        <section class="connection">
+          <div class="status-pill" id="statusPill">
+            <i></i>
+            <span id="statusText">Simulador ativo</span>
+          </div>
+          <button id="langBtn" class="ghost">EN</button>
+          <button id="connectBtn" class="primary" data-i18n="connect">Conectar</button>
+          <button id="simBtn" class="ghost active" data-i18n="simulator">Simulador</button>
+        </section>
+      </header>
+
+      <section class="hero-grid">
+        <article class="panel core-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow" data-i18n="aluFlow">Fluxo da ULA</p>
+              <h2 id="stageLabel">Entrada do operando A</h2>
+            </div>
+            <div class="sample">
+              <span id="seqLabel">seq 0000</span>
+              <span id="rateLabel">10 Hz</span>
+            </div>
+          </div>
+
+          <div class="alu-stage">
+            <div class="operand" data-name="A">
+              <span>A</span>
+              <strong id="valueA">0000</strong>
+              <small id="decA">0</small>
+            </div>
+            <div class="operator">
+              <span id="opBits">000</span>
+              <strong id="opName">AND</strong>
+            </div>
+            <div class="operand" data-name="B">
+              <span>B</span>
+              <strong id="valueB">0000</strong>
+              <small id="decB">0</small>
+            </div>
+            <div class="equals">=</div>
+            <div class="operand result" data-name="R">
+              <span>R</span>
+              <strong id="valueR">0000</strong>
+              <small id="decR">0</small>
+            </div>
+          </div>
+
+          <div class="flag-row" id="flagRow"></div>
+
+          <div class="bit-console">
+            <div class="bit-input">
+              <p class="eyebrow" data-i18n="sendSignal">Enviar sinal</p>
+              <div class="nibble" id="inputNibble"></div>
+            </div>
+            <div class="control-pad">
+              <button id="sendInputBtn" class="primary" data-i18n="sendInput">Enviar input</button>
+              <button id="okBtn" class="ghost">OK</button>
+              <button id="staticBtn" class="ghost">GET_STATIC</button>
+            </div>
+          </div>
+        </article>
+
+        <article class="panel board-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow" data-i18n="physicalSignals">Sinais fisicos</p>
+              <h2 data-i18n="ledsButtons">LEDs e botoes</h2>
+            </div>
+          </div>
+
+          <div class="board-visual">
+            <div class="uno">
+              <div class="usb"></div>
+              <div class="chip"></div>
+              <div class="pinrail top"></div>
+              <div class="pinrail bottom"></div>
+              <span class="uno-label">UNO</span>
+            </div>
+            <div class="wire-field" id="wireField"></div>
+          </div>
+
+          <div class="io-grid">
+            <div>
+              <p class="eyebrow" data-i18n="ledPins">LEDs D2-D6</p>
+              <div class="leds" id="leds"></div>
+            </div>
+            <div>
+              <p class="eyebrow" data-i18n="buttonPins">Botoes D7-D11</p>
+              <div class="buttons" id="buttons"></div>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="dashboard">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow" data-i18n="liveDump">Dump ao vivo</p>
+              <h2>SRAM ula_probe[128]</h2>
+            </div>
+            <strong id="selectedByte">0x00</strong>
+          </div>
+          <div class="heatmap" id="sramMap"></div>
+          <div class="inspector" id="inspector"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow" data-i18n="registers">Registradores</p>
+              <h2>Portas B / C / D</h2>
+            </div>
+          </div>
+          <div class="ports" id="ports"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow" data-i18n="staticMemory">Memoria estatica</p>
+              <h2>EEPROM e FLASH</h2>
+            </div>
+          </div>
+          <div class="dump-tabs">
+            <button class="tab active" data-dump="eeprom">EEPROM</button>
+            <button class="tab" data-dump="flash">FLASH</button>
+          </div>
+          <pre id="dumpView"></pre>
+        </article>
+      </section>
+    </main>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
