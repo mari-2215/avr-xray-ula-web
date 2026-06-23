@@ -5,6 +5,9 @@ const COPY = {
     statusPaused: "Simulador pausado",
     serialUnavailable: "Web Serial indisponivel neste navegador",
     serialConnected: "Serial conectado em 115200",
+    bridge: "API local",
+    bridgeConnected: "API local conectada",
+    bridgeFailed: "Falha na API local",
     connectFailed: "Falha ao conectar",
     serialStopped: "Serial interrompido",
     ignoredLine: "Linha ignorada",
@@ -21,6 +24,11 @@ const COPY = {
     liveDump: "Dump ao vivo",
     registers: "Registradores",
     staticMemory: "Memoria estatica",
+    tabOverview: "Visao Geral",
+    tabSreg: "SREG",
+    tabPorts: "Portas",
+    tabTimers: "Temporizadores",
+    tabMemory: "Memoria",
     waitingStatic: "Aguardando GET_STATIC...",
     selectedBit: "Alternar bit",
     ledCommand: "Enviar comando para LED",
@@ -34,6 +42,9 @@ const COPY = {
     statusPaused: "Simulator paused",
     serialUnavailable: "Web Serial is unavailable in this browser",
     serialConnected: "Serial connected at 115200",
+    bridge: "Local API",
+    bridgeConnected: "Local API connected",
+    bridgeFailed: "Local API failed",
     connectFailed: "Connection failed",
     serialStopped: "Serial stopped",
     ignoredLine: "Ignored line",
@@ -50,6 +61,11 @@ const COPY = {
     liveDump: "Live dump",
     registers: "Registers",
     staticMemory: "Static memory",
+    tabOverview: "Overview",
+    tabSreg: "SREG",
+    tabPorts: "Ports",
+    tabTimers: "Timers",
+    tabMemory: "Memory",
     waitingStatic: "Waiting for GET_STATIC...",
     selectedBit: "Toggle bit",
     ledCommand: "Send command to LED",
@@ -83,7 +99,10 @@ const state = {
   writer: null,
   buffer: "",
   connected: false,
-  simulate: true,
+  bridgeConnected: false,
+  eventSource: null,
+  bridgeBase: "http://localhost:8765",
+  simulate: false,
   selectedInput: 0,
   selectedDump: "eeprom",
   selectedCell: 0,
@@ -115,6 +134,14 @@ function initUi() {
     node.id = `flag${name}`;
     node.textContent = name;
     $("flagRow").appendChild(node);
+  });
+
+  ["I", "T", "H", "S", "V", "N", "Z", "C"].forEach((name) => {
+    const node = document.createElement("div");
+    node.className = "flag";
+    node.id = `sreg${name}`;
+    node.textContent = name;
+    $("sregFlags").appendChild(node);
   });
 
   [3, 2, 1, 0].forEach((bit) => {
@@ -163,15 +190,28 @@ function initUi() {
 
   ["B", "C", "D"].forEach((port) => $("ports").appendChild(makePort(port)));
 
-  document.querySelectorAll(".tab").forEach((tab) => {
+  ["tcnt0", "tcnt1", "tcnt2", "tccr0a", "tccr0b", "tccr1a", "tccr1b", "tccr2a", "tccr2b"].forEach((name) => {
+    const node = document.createElement("div");
+    node.className = "metric";
+    node.id = `timer-${name}`;
+    node.innerHTML = `<span>${name.toUpperCase()}</span><strong>0</strong>`;
+    $("timers").appendChild(node);
+  });
+
+  document.querySelectorAll(".dump-tab").forEach((tab) => {
     tab.addEventListener("click", () => {
       state.selectedDump = tab.dataset.dump;
-      document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t === tab));
+      document.querySelectorAll(".dump-tab").forEach((t) => t.classList.toggle("active", t === tab));
       renderDump();
     });
   });
 
+  document.querySelectorAll(".view-tab").forEach((tab) => {
+    tab.addEventListener("click", () => selectView(tab.dataset.view));
+  });
+
   $("connectBtn").addEventListener("click", connectSerial);
+  $("bridgeBtn").addEventListener("click", connectBridge);
   $("simBtn").addEventListener("click", toggleSimulator);
   $("langBtn").addEventListener("click", toggleLanguage);
   $("sendInputBtn").addEventListener("click", () => sendCommand(`INPUT:${state.selectedInput}`));
@@ -181,6 +221,15 @@ function initUi() {
   renderInputNibble();
   renderDump();
   applyLanguage();
+}
+
+function selectView(view) {
+  document.querySelectorAll(".view-tab").forEach((tab) => {
+    tab.classList.toggle("active", tab.dataset.view === view);
+  });
+  document.querySelectorAll(".tab-panel").forEach((panel) => {
+    panel.classList.toggle("active", panel.id === `view-${view}`);
+  });
 }
 
 function makePort(port) {
@@ -215,6 +264,7 @@ async function connectSerial() {
     state.writer = state.port.writable.getWriter();
     state.reader = state.port.readable.getReader();
     state.connected = true;
+    state.bridgeConnected = false;
     state.simulate = false;
     $("simBtn").classList.remove("active");
     setStatus(t("serialConnected"), true);
@@ -223,6 +273,37 @@ async function connectSerial() {
   } catch (error) {
     setStatus(`${t("connectFailed")}: ${error.message}`, false);
   }
+}
+
+function connectBridge() {
+  if (state.eventSource) {
+    state.eventSource.close();
+    state.eventSource = null;
+  }
+
+  const source = new EventSource(`${state.bridgeBase}/api/events`);
+  state.eventSource = source;
+
+  source.onopen = () => {
+    state.connected = true;
+    state.bridgeConnected = true;
+    state.simulate = false;
+    $("simBtn").classList.remove("active");
+    $("bridgeBtn").classList.add("active");
+    setStatus(t("bridgeConnected"), true);
+    sendCommand("GET_STATIC");
+  };
+
+  source.onmessage = (event) => {
+    if (event.data) handleLine(event.data);
+  };
+
+  source.onerror = () => {
+    state.connected = false;
+    state.bridgeConnected = false;
+    $("bridgeBtn").classList.remove("active");
+    setStatus(`${t("bridgeFailed")}: ${state.bridgeBase}`, false);
+  };
 }
 
 async function readLoop() {
@@ -275,6 +356,14 @@ function normalizeSnapshot(payload) {
 
 async function sendCommand(command) {
   pulseCommand(command);
+  if (state.bridgeConnected) {
+    await fetch(`${state.bridgeBase}/api/command`, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: command,
+    });
+    return;
+  }
   if (!state.writer) return;
   const bytes = new TextEncoder().encode(`${command}\n`);
   await state.writer.write(bytes);
@@ -335,7 +424,37 @@ function renderFrame(frame) {
   renderLeds(ula, frame.ports?.D?.port);
   renderButtons(frame.ports?.B?.pin || 0, frame.ports?.D?.pin || 0);
   renderPorts(frame.ports || {});
+  renderSreg(frame.sreg || 0);
+  renderTimers(frame.timers || {}, frame.adc || {});
   renderSram(frame.sram);
+}
+
+function renderSreg(value) {
+  $("sregValue").textContent = `0x${hex(value)}`;
+  const flags = [
+    ["I", 7],
+    ["T", 6],
+    ["H", 5],
+    ["S", 4],
+    ["V", 3],
+    ["N", 2],
+    ["Z", 1],
+    ["C", 0],
+  ];
+  flags.forEach(([name, bit]) => {
+    $(`sreg${name}`).classList.toggle("on", Boolean(value & (1 << bit)));
+  });
+}
+
+function renderTimers(timers, adc) {
+  Object.entries(timers).forEach(([name, value]) => {
+    const node = $(`timer-${name}`);
+    if (node) node.querySelector("strong").textContent = value;
+  });
+  const adcValue = adc.a0 || 0;
+  const millivolts = adc.millivolts || 0;
+  $("adcValue").textContent = `${adcValue} / ${millivolts} mV`;
+  $("adcMeter").style.width = `${Math.max(0, Math.min(100, (adcValue / 1023) * 100))}%`;
 }
 
 function renderInputNibble() {

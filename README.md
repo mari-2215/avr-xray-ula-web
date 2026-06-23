@@ -62,6 +62,27 @@ http://localhost:8080
 
 Use **Conectar / Connect** to select the Arduino port. Use **Simulador / Simulator** when the hardware is not connected.
 
+Firefox on Linux does not support Web Serial. For Firefox, run the local bridge:
+
+```bash
+cd web
+python -m pip install pyserial
+python bridge.py --serial /dev/ttyACM0
+```
+
+Open `http://localhost:8765` and click **API local / Local API**.
+
+## Requirements checklist
+
+- Dynamic web interface: animated dashboard with live tabs for ULA, SREG, ports, timers and memory.
+- ULA access: live operands, operation, result, flags and workflow stage are read from Arduino snapshots.
+- Dump access: SRAM, EEPROM and FLASH are rendered in the memory tab.
+- API usage: Chrome/Edge can use Web Serial directly; Firefox/Linux can use the local HTTP/SSE API bridge.
+- Bidirectional flow: the web UI reads Arduino `snapshot`/`memory` frames and sends commands back.
+- LED signal command: clicking LED controls sends `LED:*` commands to the Arduino.
+- Button signal reading: button states are read from `PINB`/`PIND` in the live port snapshots.
+- EEPROM log: operations are persisted with `EEPROM.update()` only after the operation stage is confirmed.
+
 ## ALU Workflow
 
 1. Toggle the bit buttons to build operand `A`, then press OK.
