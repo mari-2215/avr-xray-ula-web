@@ -414,7 +414,7 @@ void handleLedCommand(char *target, uint8_t level) {
 void sendHello() {
   Serial.print(F("{\"type\":\"hello\",\"protocol\":"));
   Serial.print(PROTOCOL_VERSION);
-  Serial.print(F(",\"device\":\"AVR X-Ray From Zero\",\"firmware\":\"2.0.0\",\"sample_hz\":10}"));
+  Serial.print(F(",\"device\":\"AVR X-Ray ULA Web\",\"firmware\":\"2.0.0\",\"sample_hz\":10}"));
   Serial.println();
 }
 

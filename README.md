@@ -1,12 +1,12 @@
-# AVR X-Ray From Zero
+# AVR X-Ray ULA Web
 
-**Português:** projeto completo, feito do zero, para operar uma ULA física de 4 bits no Arduino Uno e observar o ATmega328P em tempo real por uma interface web dinâmica. A ULA, o X-Ray e o log em EEPROM seguem a mesma lógica do projeto anterior: fluxo `A -> B -> operação -> resultado`, snapshots JSON Lines a `115200`, dumps de SRAM/EEPROM/FLASH e histórico circular persistente na EEPROM.
+**Portugues:** projeto completo para operar uma ULA fisica de 4 bits no Arduino Uno e observar o ATmega328P em tempo real por uma interface web dinamica. A ULA, o X-Ray e o log em EEPROM seguem a mesma logica: fluxo `A -> B -> operacao -> resultado`, snapshots JSON Lines a `115200`, dumps de SRAM/EEPROM/FLASH e historico circular persistente na EEPROM.
 
-**English:** a full from-scratch project for operating a physical 4-bit ALU on an Arduino Uno while inspecting the ATmega328P in real time through a dynamic web interface. The ALU, X-Ray monitor and EEPROM log follow the same logic as the previous project: `A -> B -> operation -> result`, JSON Lines snapshots at `115200`, SRAM/EEPROM/FLASH dumps and a persistent circular EEPROM history.
+**English:** a complete project for operating a physical 4-bit ALU on an Arduino Uno while inspecting the ATmega328P in real time through a dynamic web interface. The ALU, X-Ray monitor and EEPROM log follow the same logic: `A -> B -> operation -> result`, JSON Lines snapshots at `115200`, SRAM/EEPROM/FLASH dumps and a persistent circular EEPROM history.
 
 ## O que vem aqui / What's Included
 
-- Arduino firmware written from scratch: `arduino/avr_xray_from_zero/avr_xray_from_zero.ino`.
+- Arduino firmware: `arduino/avr_xray_ula_web/avr_xray_ula_web.ino`.
 - Bilingual Web Serial dashboard: `web/index.html`.
 - Physical and virtual ALU input.
 - Output LEDs driven by the ALU, with temporary web LED override commands.
@@ -33,7 +33,7 @@ More detail: [docs/hardware.md](docs/hardware.md)
 Open this sketch in the Arduino IDE:
 
 ```text
-arduino/avr_xray_from_zero/avr_xray_from_zero.ino
+arduino/avr_xray_ula_web/avr_xray_ula_web.ino
 ```
 
 Select **Arduino Uno**, choose the board port, upload, and close the Arduino Serial Monitor before opening the web console.
@@ -41,8 +41,8 @@ Select **Arduino Uno**, choose the board port, upload, and close the Arduino Ser
 Arduino CLI:
 
 ```bash
-arduino-cli compile --fqbn arduino:avr:uno arduino/avr_xray_from_zero
-arduino-cli upload --fqbn arduino:avr:uno --port COM3 arduino/avr_xray_from_zero
+arduino-cli compile --fqbn arduino:avr:uno arduino/avr_xray_ula_web
+arduino-cli upload --fqbn arduino:avr:uno --port COM3 arduino/avr_xray_ula_web
 ```
 
 ## Run the Web Console
@@ -118,8 +118,8 @@ The firmware writes a record only when the operation stage is confirmed with OK.
 ## Project Structure
 
 ```text
-avr-xray-ula-from-zero/
-  arduino/avr_xray_from_zero/avr_xray_from_zero.ino
+avr-xray-ula-web/
+  arduino/avr_xray_ula_web/avr_xray_ula_web.ino
   web/index.html
   web/styles.css
   web/app.js

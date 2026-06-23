@@ -1,6 +1,6 @@
 # Web Console
 
-Static Web Serial UI for AVR X-Ray From Zero.
+Static Web Serial UI for AVR X-Ray ULA Web.
 
 ## Run
 
@@ -15,4 +15,3 @@ Open `http://localhost:8080` in Chrome or Edge.
 - Web Serial does not work from a plain `file://` URL.
 - The simulator button keeps the interface moving without hardware.
 - Use **Conectar / Connect** for the Arduino Uno port after uploading the firmware.
-
