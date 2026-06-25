@@ -76,6 +76,7 @@ void pressBit1();
 void pressBit0();
 void pressOk();
 void toggleInputBit(uint8_t bit);
+void resetOperationState();
 void runOperation(uint8_t a, uint8_t b, uint8_t operation);
 void executeUla();
 void writeLeds(uint8_t value, bool carry);
@@ -200,6 +201,18 @@ void toggleInputBit(uint8_t bit) {
   writeLeds(currentInput, false);
 }
 
+void resetOperationState() {
+  operandA = 0;
+  operandB = 0;
+  operationCode = 0;
+  resultValue = 0;
+  ulaFlags = 0;
+  currentInput = 0;
+  inputStage = STAGE_INPUT_A;
+  clearLedOverride();
+  writeLeds(0, false);
+}
+
 void runOperation(uint8_t a, uint8_t b, uint8_t operation) {
   operandA = a & 0x0F;
   operandB = b & 0x0F;
@@ -242,9 +255,7 @@ void pressOk() {
     return;
   }
 
-  inputStage = STAGE_INPUT_A;
-  currentInput = 0;
-  writeLeds(0, false);
+  resetOperationState();
 }
 
 void executeUla() {
@@ -454,6 +465,12 @@ void handleCommand() {
   if (strcmp(commandBuffer, "OK") == 0) {
     pressOk();
     sendAck("OK", true);
+    return;
+  }
+
+  if (strcmp(commandBuffer, "CLEAR") == 0 || strcmp(commandBuffer, "RESET") == 0) {
+    resetOperationState();
+    sendAck("CLEAR", true);
     return;
   }
 

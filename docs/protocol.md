@@ -74,6 +74,7 @@ Sent after a recognized command is processed.
 | `GET_STATIC` | Resend EEPROM and FLASH dump |
 | `INPUT:0..15` | Replace current virtual nibble |
 | `OK` | Confirm the current ALU stage |
+| `CLEAR` / `RESET` | Reset operands, operation, result, flags, stage and LEDs |
 | `OP:0..7` | Select operation code without blocking physical buttons |
 | `RUN:A:B:OP` | Execute one ALU operation from the web UI, persist it in EEPROM, and show the result |
 | `PRESS:B3` / `PRESS:B2` / `PRESS:B1` / `PRESS:B0` | Simulate a physical bit-button press |

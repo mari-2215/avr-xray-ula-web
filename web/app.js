@@ -260,7 +260,8 @@ function initUi() {
   $("simBtn").addEventListener("click", toggleSimulator);
   $("langBtn").addEventListener("click", toggleLanguage);
   $("sendInputBtn").addEventListener("click", () => sendCommand(`INPUT:${state.selectedInput}`));
-  $("okBtn").addEventListener("click", () => sendCommand("OK"));
+  $("okBtn").addEventListener("click", pressOkFromUi);
+  $("clearBtn").addEventListener("click", clearOperation);
   $("staticBtn").addEventListener("click", () => sendCommand("GET_STATIC"));
   $("runDecimalBtn").addEventListener("click", runDecimalOperation);
   $("smartRunBtn").addEventListener("click", runSmartCommand);
@@ -785,6 +786,38 @@ function renderFrame(frame) {
   state.lastFrameStage = ula.stage;
 }
 
+async function pressOkFromUi() {
+  const resetAfterOk = state.frame?.ula?.stage === 3;
+  await sendCommand("OK");
+  if (resetAfterOk) resetDisplayLocally("Display limpo");
+}
+
+async function clearOperation() {
+  resetDisplayLocally("Display limpo");
+  if (state.bridgeConnected || state.writer) await sendCommand("CLEAR");
+}
+
+function resetDisplayLocally(statusText) {
+  state.selectedInput = 0;
+  state.pendingSource = "";
+  renderInputNibble();
+  const ports = {
+    ...(state.frame?.ports || {}),
+    D: { ...(state.frame?.ports?.D || {}), port: 0 },
+  };
+  renderFrame({
+    seq: state.frame ? state.frame.seq + 1 : 0,
+    millis: state.frame ? state.frame.millis : 0,
+    ula: { a: 0, b: 0, op: 0, result: 0, flags: 0, stage: 0, input: 0 },
+    ports,
+    sreg: state.frame?.sreg || 0,
+    timers: state.frame?.timers || {},
+    adc: state.frame?.adc || { a0: 0, millivolts: 0 },
+    sram: state.frame?.sram || new Uint8Array(128),
+  });
+  setStatus(statusText, true);
+}
+
 function maybeLogFrameOperation(frame) {
   const ula = frame.ula || {};
   if (ula.stage !== 3) return;
@@ -877,18 +910,24 @@ function renderInputNibble() {
 
 function renderLeds(ula, portD) {
   if (Number.isInteger(portD)) {
-    $("ledCARRY").classList.toggle("on", Boolean(portD & (1 << 2)));
-    $("ledB3").classList.toggle("on", Boolean(portD & (1 << 3)));
-    $("ledB2").classList.toggle("on", Boolean(portD & (1 << 4)));
-    $("ledB1").classList.toggle("on", Boolean(portD & (1 << 5)));
-    $("ledB0").classList.toggle("on", Boolean(portD & (1 << 6)));
+    setLedState("CARRY", Boolean(portD & (1 << 2)));
+    setLedState("B3", Boolean(portD & (1 << 3)));
+    setLedState("B2", Boolean(portD & (1 << 4)));
+    setLedState("B1", Boolean(portD & (1 << 5)));
+    setLedState("B0", Boolean(portD & (1 << 6)));
     return;
   }
 
-  $("ledCARRY").classList.toggle("on", Boolean(ula.flags & 2));
+  setLedState("CARRY", Boolean(ula.flags & 2));
   [3, 2, 1, 0].forEach((bit) => {
-    $(`ledB${bit}`).classList.toggle("on", Boolean(ula.result & (1 << bit)));
+    setLedState(`B${bit}`, Boolean(ula.result & (1 << bit)));
   });
+}
+
+function setLedState(name, enabled) {
+  $(`led${name}`).classList.toggle("on", enabled);
+  const boardPin = $(`boardLed${name}`);
+  if (boardPin) boardPin.classList.toggle("on", enabled);
 }
 
 function renderButtons(pinB, pinD) {
@@ -897,7 +936,10 @@ function renderButtons(pinB, pinD) {
     const source = pinValues[pin] || 0;
     const bit = pin === 7 ? 7 : pin - 8;
     const releasedHigh = Boolean(source & (1 << bit));
-    $(`button${pin}`).classList.toggle("on", !releasedHigh);
+    const pressed = !releasedHigh;
+    $(`button${pin}`).classList.toggle("on", pressed);
+    const boardPin = $(`boardButton${pin}`);
+    if (boardPin) boardPin.classList.toggle("on", pressed);
   });
 }
 
