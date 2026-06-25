@@ -40,6 +40,8 @@ arduino/avr_xray_ula_web/avr_xray_ula_web.ino
 
 Select **Arduino Uno**, choose the board port, upload, and close the Arduino Serial Monitor before opening the web console.
 
+Important: the LED controls, decimal runner and smart command runner require this repository's firmware on the Uno. If the page only shows `TX ...` and never shows `ACK ...` or `RX snapshot ...`, upload the sketch again and reconnect the web console.
+
 Arduino CLI:
 
 ```bash
@@ -85,6 +87,8 @@ If the page says the local API is open but has no serial connection, restart the
 ```bash
 python bridge.py --serial /dev/ttyACM0
 ```
+
+If the status stays on `TX ...`, the browser sent a command but did not receive a firmware response. Check that the Arduino IDE Serial Monitor is closed, the selected device is the Uno, and the current sketch was uploaded.
 
 ## Requirements checklist
 

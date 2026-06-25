@@ -88,6 +88,7 @@ void persistOperation();
 void processSerialCommands();
 void handleCommand();
 void sendHello();
+void sendAck(const char *command, bool ok);
 void sendSnapshot(uint16_t adcValue);
 void sendStaticMemory();
 void printHexByte(uint8_t value);
@@ -446,11 +447,13 @@ void processSerialCommands() {
 void handleCommand() {
   if (strcmp(commandBuffer, "GET_STATIC") == 0) {
     sendStaticMemory();
+    sendAck("GET_STATIC", true);
     return;
   }
 
   if (strcmp(commandBuffer, "OK") == 0) {
     pressOk();
+    sendAck("OK", true);
     return;
   }
 
@@ -458,6 +461,9 @@ void handleCommand() {
     if (inputStage != STAGE_RESULT) {
       currentInput = atoi(commandBuffer + 6) & 0x0F;
       writeLeds(currentInput, false);
+      sendAck("INPUT", true);
+    } else {
+      sendAck("INPUT", false);
     }
     return;
   }
@@ -468,6 +474,7 @@ void handleCommand() {
       currentInput = operationCode;
       writeLeds(currentInput, false);
     }
+    sendAck("OP", true);
     return;
   }
 
@@ -475,15 +482,18 @@ void handleCommand() {
     char *cursor = commandBuffer + 4;
     char *first = strchr(cursor, ':');
     if (first == NULL) {
+      sendAck("RUN", false);
       return;
     }
     *first = '\0';
     char *second = strchr(first + 1, ':');
     if (second == NULL) {
+      sendAck("RUN", false);
       return;
     }
     *second = '\0';
     runOperation(atoi(cursor), atoi(first + 1), atoi(second + 1));
+    sendAck("RUN", true);
     return;
   }
 
@@ -500,11 +510,13 @@ void handleCommand() {
     } else if (strcmp(target, "OK") == 0) {
       pressOk();
     }
+    sendAck("PRESS", true);
     return;
   }
 
   if (strcmp(commandBuffer, "LED_AUTO") == 0) {
     clearLedOverride();
+    sendAck("LED_AUTO", true);
     return;
   }
 
@@ -512,18 +524,37 @@ void handleCommand() {
     char *target = commandBuffer + 4;
     char *separator = strchr(target, ':');
     if (separator == NULL) {
+      sendAck("LED", false);
       return;
     }
     *separator = '\0';
     setLedOverride(target, atoi(separator + 1) != 0);
+    sendAck("LED", true);
     return;
   }
+
+  sendAck("UNKNOWN", false);
 }
 
 void sendHello() {
   Serial.print(F("{\"type\":\"hello\",\"protocol\":"));
   Serial.print(PROTOCOL_VERSION);
   Serial.print(F(",\"device\":\"AVR X-Ray ULA Web\",\"firmware\":\"2.1.0\",\"sample_hz\":10}"));
+  Serial.println();
+}
+
+void sendAck(const char *command, bool ok) {
+  Serial.print(F("{\"type\":\"ack\",\"protocol\":"));
+  Serial.print(PROTOCOL_VERSION);
+  Serial.print(F(",\"command\":\""));
+  Serial.print(command);
+  Serial.print(F("\",\"ok\":"));
+  if (ok) {
+    Serial.print(F("true"));
+  } else {
+    Serial.print(F("false"));
+  }
+  Serial.print('}');
   Serial.println();
 }
 

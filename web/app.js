@@ -10,6 +10,7 @@ const COPY = {
     bridgeFailed: "Falha na API local",
     bridgeNoSerial: "API local aberta, mas sem serial",
     connectFailed: "Falha ao conectar",
+    noConnection: "Sem conexao real com o Arduino",
     serialStopped: "Serial interrompido",
     brandEyebrow: "Arduino Uno / ATmega328P",
     connect: "Conectar",
@@ -48,6 +49,7 @@ const COPY = {
     bridgeFailed: "Local API failed",
     bridgeNoSerial: "Local API open, but no serial",
     connectFailed: "Connection failed",
+    noConnection: "No real Arduino connection",
     serialStopped: "Serial stopped",
     brandEyebrow: "Arduino Uno / ATmega328P",
     connect: "Connect",
@@ -127,6 +129,10 @@ const state = {
   gameLastHitAt: 0,
   selectedOperation: 0,
   smartRunning: false,
+  commandMode: "legacy",
+  firmware: "",
+  rxCount: 0,
+  lastRxAt: 0,
 };
 const t = (key) => COPY[state.lang][key];
 
@@ -289,7 +295,10 @@ function selectOperation(code, notifyArduino) {
   $("opBits").textContent = op.bits;
   $("opName").textContent = op.name;
   $("opExpression").textContent = op.expression;
-  if (notifyArduino) sendCommand(`OP:${state.selectedOperation}`);
+  if (notifyArduino) {
+    const command = state.commandMode === "direct" ? `OP:${state.selectedOperation}` : `INPUT:${state.selectedOperation}`;
+    sendCommand(command);
+  }
 }
 
 function renderFlagDescriptions() {
@@ -344,7 +353,32 @@ async function executeOperation(a, b, op) {
     renderSimulatedOperation(a, b, op);
     return;
   }
-  await sendCommand(`RUN:${a}:${b}:${op}`);
+  if (state.commandMode === "direct") {
+    await sendCommand(`RUN:${a}:${b}:${op}`);
+    return;
+  }
+  await sendLegacyOperation(a, b, op);
+}
+
+async function sendLegacyOperation(a, b, op) {
+  const currentStage = state.frame?.ula?.stage;
+  if (currentStage === 3) {
+    await sendCommand("OK");
+    await wait(120);
+  }
+  await sendCommand(`INPUT:${a}`);
+  await wait(100);
+  await sendCommand("OK");
+  await wait(140);
+  await sendCommand(`INPUT:${b}`);
+  await wait(100);
+  await sendCommand("OK");
+  await wait(140);
+  await sendCommand(`INPUT:${op}`);
+  await wait(100);
+  await sendCommand("OK");
+  await wait(120);
+  await sendCommand("GET_STATIC");
 }
 
 function renderSimulatedOperation(a, b, op) {
@@ -475,7 +509,7 @@ async function connectSerial() {
     $("simBtn").classList.remove("active");
     setStatus(t("serialConnected"), true);
     readLoop();
-    sendCommand("GET_STATIC");
+    requestStaticAfterConnect();
   } catch (error) {
     setStatus(`${t("connectFailed")}: ${error.message}`, false);
   }
@@ -509,7 +543,7 @@ async function connectBridge() {
     $("simBtn").classList.remove("active");
     $("bridgeBtn").classList.add("active");
     setStatus(t("bridgeConnected"), true);
-    sendCommand("GET_STATIC");
+    requestStaticAfterConnect();
   };
 
   source.onmessage = (event) => {
@@ -522,6 +556,14 @@ async function connectBridge() {
     $("bridgeBtn").classList.remove("active");
     setStatus(`${t("bridgeFailed")}: ${state.bridgeBase}`, false);
   };
+}
+
+function requestStaticAfterConnect() {
+  [350, 1600, 3200].forEach((delay) => {
+    setTimeout(() => {
+      if (state.connected || state.bridgeConnected) sendCommand("GET_STATIC");
+    }, delay);
+  });
 }
 
 async function readLoop() {
@@ -549,20 +591,41 @@ function handleLine(line) {
 
   try {
     const payload = JSON.parse(jsonText);
-    if (payload.protocol !== PROTOCOL_VERSION) return;
-    if (payload.type === "snapshot") renderFrame(normalizeSnapshot(payload));
+    if (payload.protocol && payload.protocol !== PROTOCOL_VERSION) return;
+    state.rxCount += 1;
+    state.lastRxAt = Date.now();
+    if (payload.type === "snapshot") {
+      renderFrame(normalizeSnapshot(payload));
+      setStatus(`RX snapshot ${payload.seq ?? state.rxCount}`, true);
+    }
     if (payload.type === "memory") {
       state.memory = {
         eeprom: bytesFromHex(payload.eeprom || "", 192),
         flash: bytesFromHex(payload.flash || "", 64),
       };
       renderDump();
+      setStatus("RX memory dump", true);
     }
-    if (payload.type === "hello") setStatus(`${payload.device} / fw ${payload.firmware}`, true);
+    if (payload.type === "ack") {
+      setStatus(`ACK ${payload.command || ""}`.trim(), Boolean(payload.ok ?? true));
+    }
+    if (payload.type === "hello") {
+      state.firmware = payload.firmware || "";
+      state.commandMode = supportsDirectCommands(state.firmware) ? "direct" : "legacy";
+      setStatus(`${payload.device || "Arduino"} / fw ${state.firmware || "?"}`, true);
+    }
   } catch (error) {
     // Serial can start mid-line right after opening. Ignore malformed fragments silently.
     return;
   }
+}
+
+function supportsDirectCommands(firmware) {
+  const match = String(firmware || "").match(/^(\d+)\.(\d+)/);
+  if (!match) return false;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major > 2 || (major === 2 && minor >= 1);
 }
 
 function normalizeSnapshot(payload) {
@@ -579,6 +642,10 @@ function normalizeSnapshot(payload) {
 }
 
 async function sendCommand(command) {
+  if (!state.simulate && !state.bridgeConnected && !state.writer) {
+    setStatus(t("noConnection"), false);
+    return false;
+  }
   pulseCommand(command);
   if (state.bridgeConnected) {
     const response = await fetch(`${state.bridgeBase}/api/command`, {
@@ -589,12 +656,14 @@ async function sendCommand(command) {
     if (!response.ok) {
       const message = await response.text();
       setStatus(`${t("bridgeFailed")}: ${message || response.status}`, false);
+      return false;
     }
-    return;
+    return true;
   }
-  if (!state.writer) return;
+  if (state.simulate && !state.writer) return true;
   const bytes = new TextEncoder().encode(`${command}\n`);
   await state.writer.write(bytes);
+  return true;
 }
 
 function pulseCommand(command) {

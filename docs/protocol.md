@@ -59,6 +59,14 @@ Sent at startup and when `GET_STATIC` is received.
 
 `flash` is a 64-byte diagnostic window encoded as uppercase hexadecimal.
 
+### `ack`
+
+Sent after a recognized command is processed.
+
+```json
+{"type":"ack","protocol":1,"command":"RUN","ok":true}
+```
+
 ## Commands
 
 | Command | Meaning |
@@ -75,3 +83,5 @@ Sent at startup and when `GET_STATIC` is received.
 | `LED_AUTO` | Return LEDs to automatic ALU output mode |
 
 The LED override lasts about 1.5 seconds and then returns to normal ALU-driven output.
+
+If the web UI shows `TX ...` but never shows `ACK ...` or `RX snapshot ...`, the browser/API is not talking to the firmware currently running on the Arduino.
