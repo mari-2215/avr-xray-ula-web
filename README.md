@@ -10,7 +10,8 @@
 - Bilingual Web Serial dashboard: `web/index.html`.
 - Physical and virtual ALU input.
 - Mouse-selectable operation table, decimal inputs and a small natural-language command runner for ALU sequences.
-- Potentiometer game driven by ADC A0, with simulator fallback.
+- Live operation history under the physical signals panel.
+- Potentiometer game driven by ADC A0, with simulator fallback and reset control.
 - Output LEDs driven by the ALU, with temporary web LED override commands.
 - Live X-Ray snapshots for ALU state, ports, timers, SREG, ADC and SRAM probe.
 - EEPROM circular log with 32 confirmed ALU operations.

@@ -166,6 +166,31 @@
                 <div class="buttons" id="buttons"></div>
               </div>
             </div>
+
+            <div class="operation-log">
+              <div class="panel-head compact">
+                <div>
+                  <p class="eyebrow">Log de operacoes</p>
+                  <h3>Historico ao vivo</h3>
+                </div>
+              </div>
+              <table class="log-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Origem</th>
+                    <th>A</th>
+                    <th>B</th>
+                    <th>OP</th>
+                    <th>R</th>
+                    <th>Flags</th>
+                  </tr>
+                </thead>
+                <tbody id="operationLog">
+                  <tr><td colspan="7">Aguardando operacoes.</td></tr>
+                </tbody>
+              </table>
+            </div>
           </article>
         </section>
       </section>
@@ -197,6 +222,7 @@
               <div class="game-head">
                 <span>Pot Racer</span>
                 <strong id="gameScore">0</strong>
+                <button id="gameResetBtn" class="ghost small">Clear</button>
               </div>
               <div class="game-lane" id="gameLane">
                 <span id="gameTarget"></span>

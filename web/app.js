@@ -133,6 +133,10 @@ const state = {
   firmware: "",
   rxCount: 0,
   lastRxAt: 0,
+  operationLog: [],
+  lastLoggedSignature: "",
+  lastFrameStage: null,
+  pendingSource: "",
 };
 const t = (key) => COPY[state.lang][key];
 
@@ -260,6 +264,7 @@ function initUi() {
   $("staticBtn").addEventListener("click", () => sendCommand("GET_STATIC"));
   $("runDecimalBtn").addEventListener("click", runDecimalOperation);
   $("smartRunBtn").addEventListener("click", runSmartCommand);
+  $("gameResetBtn").addEventListener("click", resetPotGame);
   ["decimalA", "decimalB"].forEach((id) => {
     $(id).addEventListener("input", renderDecimalBits);
   });
@@ -267,6 +272,7 @@ function initUi() {
   renderInputNibble();
   renderDecimalBits();
   renderFlagDescriptions();
+  renderOperationLog();
   renderDump();
   applyLanguage();
 }
@@ -344,20 +350,25 @@ async function runDecimalOperation() {
     $("smartStatus").textContent = "Use valores de 0 a 15.";
     return;
   }
-  await executeOperation(a, b, state.selectedOperation);
+  await executeOperation(a, b, state.selectedOperation, "UI");
 }
 
-async function executeOperation(a, b, op) {
+async function executeOperation(a, b, op, source = "UI", options = {}) {
   selectOperation(op, false);
-  if (state.simulate) {
-    state.simulate = false;
-    $("simBtn").classList.remove("active");
-    renderSimulatedOperation(a, b, op);
+  state.pendingSource = source;
+  if (state.simulate || options.forceSimulated) {
+    if (!options.forceSimulated) {
+      state.simulate = false;
+      $("simBtn").classList.remove("active");
+    }
+    renderSimulatedOperation(a, b, op, source);
     setStatus("Resultado simulado", true);
     return;
   }
   if (state.commandMode === "direct") {
     await sendCommand(`RUN:${a}:${b}:${op}`);
+    await wait(250);
+    await sendCommand("GET_STATIC");
     return;
   }
   await sendLegacyOperation(a, b, op);
@@ -384,7 +395,7 @@ async function sendLegacyOperation(a, b, op) {
   await sendCommand("GET_STATIC");
 }
 
-function renderSimulatedOperation(a, b, op) {
+function renderSimulatedOperation(a, b, op, source = "Sim") {
   const result = executeOp(a, b, op);
   const flags = makeFlags(a, b, op, result);
   const sram = new Uint8Array(128);
@@ -448,15 +459,19 @@ async function runSmartCommand() {
   }
 
   state.smartRunning = true;
+  const simulateSequence = state.simulate;
+  if (simulateSequence) {
+    state.simulate = false;
+    $("simBtn").classList.remove("active");
+  }
   $("smartStatus").textContent = `Executando ${operations.length} operacao(oes)...`;
   for (let index = 0; index < operations.length; index++) {
     const item = operations[index];
-    await executeOperation(item.a, item.b, item.op);
-    $("smartStatus").textContent = `${OPERATIONS[item.op].name} ${item.a}, ${item.b}`;
-    if (index < operations.length - 1) {
-      await blinkForSequence();
-      await wait(3000);
-    }
+    $("smartStatus").textContent = `Etapa ${index + 1}/${operations.length}: ${OPERATIONS[item.op].name} ${item.a}, ${item.b}`;
+    await executeOperation(item.a, item.b, item.op, "Smart", { forceSimulated: simulateSequence });
+    await blinkForSequence();
+    $("smartStatus").textContent = `Segurando LEDs por 3s: ${OPERATIONS[item.op].name} -> ${bits(executeOp(item.a, item.b, item.op), 4)}`;
+    await wait(3000);
   }
   $("smartStatus").textContent = "Sequencia concluida.";
   state.smartRunning = false;
@@ -706,6 +721,44 @@ function applyLanguage() {
   if (!state.connected) setStatus(state.simulate ? t("statusSim") : t("statusPaused"), state.simulate);
 }
 
+function addOperationLog(entry) {
+  const op = OPERATIONS[entry.op] || OPERATIONS[0];
+  state.operationLog.unshift({
+    ...entry,
+    opName: op.name,
+    bits: op.bits,
+    index: state.operationLog.length ? state.operationLog[0].index + 1 : 1,
+    at: new Date().toLocaleTimeString(),
+  });
+  state.operationLog = state.operationLog.slice(0, 10);
+  renderOperationLog();
+}
+
+function renderOperationLog() {
+  const body = $("operationLog");
+  if (!body) return;
+  if (!state.operationLog.length) {
+    body.innerHTML = `<tr><td colspan="7">Aguardando operacoes.</td></tr>`;
+    return;
+  }
+  body.innerHTML = state.operationLog.map((entry) => `
+    <tr>
+      <td><span>${entry.index}</span><small>${entry.at}</small></td>
+      <td>${entry.source}</td>
+      <td><code>${bits(entry.a, 4)}</code><small>${entry.a}</small></td>
+      <td><code>${bits(entry.b, 4)}</code><small>${entry.b}</small></td>
+      <td><code>${entry.bits}</code><small>${entry.opName}</small></td>
+      <td><code>${bits(entry.result, 4)}</code><small>${entry.result}</small></td>
+      <td>${formatFlags(entry.flags)}</td>
+    </tr>
+  `).join("");
+}
+
+function formatFlags(flags) {
+  const active = FLAGS.filter(([, mask]) => flags & mask).map(([name]) => name);
+  return active.length ? active.join(" ") : "-";
+}
+
 function renderFrame(frame) {
   state.frame = frame;
   const ula = frame.ula;
@@ -728,6 +781,26 @@ function renderFrame(frame) {
   renderSreg(frame.sreg || 0);
   renderTimers(frame.timers || {}, frame.adc || {});
   renderSram(frame.sram);
+  maybeLogFrameOperation(frame);
+  state.lastFrameStage = ula.stage;
+}
+
+function maybeLogFrameOperation(frame) {
+  const ula = frame.ula || {};
+  if (ula.stage !== 3) return;
+  const signature = `${ula.a}:${ula.b}:${ula.op}:${ula.result}:${ula.flags}`;
+  const shouldLog = state.pendingSource || state.lastFrameStage !== 3;
+  if (!shouldLog) return;
+  addOperationLog({
+    a: ula.a || 0,
+    b: ula.b || 0,
+    op: ula.op || 0,
+    result: ula.result || 0,
+    flags: ula.flags || 0,
+    source: state.pendingSource || (state.simulate ? "Sim" : "Arduino"),
+  });
+  state.pendingSource = "";
+  state.lastLoggedSignature = signature;
 }
 
 function updateAluFlagDescriptions(flags) {
@@ -784,6 +857,15 @@ function renderPotGame(adcValue) {
     );
   }
   $("gameScore").textContent = state.gameScore;
+}
+
+function resetPotGame() {
+  state.gameScore = 0;
+  state.gameLastHitAt = 0;
+  state.gameTarget = 0.08 + Math.random() * 0.84;
+  $("gameScore").textContent = "0";
+  $("gameTarget").style.left = `${state.gameTarget * 100}%`;
+  setStatus("Pot Racer zerado", true);
 }
 
 function renderInputNibble() {
