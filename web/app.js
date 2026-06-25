@@ -8,9 +8,9 @@ const COPY = {
     bridge: "API local",
     bridgeConnected: "API local conectada",
     bridgeFailed: "Falha na API local",
+    bridgeNoSerial: "API local aberta, mas sem serial",
     connectFailed: "Falha ao conectar",
     serialStopped: "Serial interrompido",
-    ignoredLine: "Linha ignorada",
     brandEyebrow: "Arduino Uno / ATmega328P",
     connect: "Conectar",
     simulator: "Simulador",
@@ -36,6 +36,7 @@ const COPY = {
     ops: ["AND", "OR", "NOT B", "XOR", "ADD", "SUB", "MUL", "DIV"],
     sramHistory: "Historico circular da ULA, slot",
     sramDefault: "Byte instrumentado.",
+    bridgeHint: "Firefox/Linux: rode python bridge.py --serial /dev/ttyACM0 e clique em API local.",
   },
   en: {
     statusSim: "Simulator active",
@@ -45,9 +46,9 @@ const COPY = {
     bridge: "Local API",
     bridgeConnected: "Local API connected",
     bridgeFailed: "Local API failed",
+    bridgeNoSerial: "Local API open, but no serial",
     connectFailed: "Connection failed",
     serialStopped: "Serial stopped",
-    ignoredLine: "Ignored line",
     brandEyebrow: "Arduino Uno / ATmega328P",
     connect: "Connect",
     simulator: "Simulator",
@@ -73,9 +74,20 @@ const COPY = {
     ops: ["AND", "OR", "NOT B", "XOR", "ADD", "SUB", "MUL", "DIV"],
     sramHistory: "ALU circular history, slot",
     sramDefault: "Instrumented byte.",
+    bridgeHint: "Firefox/Linux: run python bridge.py --serial /dev/ttyACM0 and click Local API.",
   },
 };
 const OPS_BITS = ["000", "001", "010", "011", "100", "101", "110", "111"];
+const OPERATIONS = [
+  { code: 0, bits: "000", name: "AND", expression: "A & B", description: "Liga somente bits que estao 1 em A e B." },
+  { code: 1, bits: "001", name: "OR", expression: "A | B", description: "Liga bits que estao 1 em A ou B." },
+  { code: 2, bits: "010", name: "NOT B", expression: "~B", description: "Inverte os quatro bits do operando B." },
+  { code: 3, bits: "011", name: "XOR", expression: "A ^ B", description: "Liga bits diferentes entre A e B." },
+  { code: 4, bits: "100", name: "ADD", expression: "A + B", description: "Soma A e B; C indica vai-um." },
+  { code: 5, bits: "101", name: "SUB", expression: "A - B", description: "Subtrai B de A; C indica borrow." },
+  { code: 6, bits: "110", name: "MUL", expression: "A * B", description: "Multiplica e mostra os quatro bits baixos; V indica overflow." },
+  { code: 7, bits: "111", name: "DIV", expression: "A / B", description: "Divisao inteira; D indica divisor zero." },
+];
 const FLAGS = [
   ["Z", 1],
   ["C", 2],
@@ -110,6 +122,11 @@ const state = {
   prevSram: new Uint8Array(128),
   frame: null,
   memory: { eeprom: new Uint8Array(192), flash: new Uint8Array(64) },
+  gameScore: 0,
+  gameTarget: 0.5,
+  gameLastHitAt: 0,
+  selectedOperation: 0,
+  smartRunning: false,
 };
 const t = (key) => COPY[state.lang][key];
 
@@ -125,6 +142,23 @@ function bytesFromHex(text, size) {
   const out = new Uint8Array(size);
   for (let i = 0; i < size; i++) out[i] = parseInt(text.slice(i * 2, i * 2 + 2), 16) || 0;
   return out;
+}
+
+function readNibbleInput(id) {
+  const value = Number($(id).value);
+  if (!Number.isInteger(value) || value < 0 || value > 15) {
+    $(id).classList.add("invalid");
+    return null;
+  }
+  $(id).classList.remove("invalid");
+  return value;
+}
+
+function renderDecimalBits() {
+  const a = readNibbleInput("decimalA");
+  const b = readNibbleInput("decimalB");
+  $("decimalABits").textContent = a === null ? "----" : bits(a, 4);
+  $("decimalBBits").textContent = b === null ? "----" : bits(b, 4);
 }
 
 function initUi() {
@@ -189,6 +223,7 @@ function initUi() {
   }
 
   ["B", "C", "D"].forEach((port) => $("ports").appendChild(makePort(port)));
+  renderOperationTable();
 
   ["tcnt0", "tcnt1", "tcnt2", "tccr0a", "tccr0b", "tccr1a", "tccr1b", "tccr2a", "tccr2b"].forEach((name) => {
     const node = document.createElement("div");
@@ -217,10 +252,71 @@ function initUi() {
   $("sendInputBtn").addEventListener("click", () => sendCommand(`INPUT:${state.selectedInput}`));
   $("okBtn").addEventListener("click", () => sendCommand("OK"));
   $("staticBtn").addEventListener("click", () => sendCommand("GET_STATIC"));
+  $("runDecimalBtn").addEventListener("click", runDecimalOperation);
+  $("smartRunBtn").addEventListener("click", runSmartCommand);
+  ["decimalA", "decimalB"].forEach((id) => {
+    $(id).addEventListener("input", renderDecimalBits);
+  });
 
   renderInputNibble();
+  renderDecimalBits();
+  renderFlagDescriptions();
   renderDump();
   applyLanguage();
+}
+
+function renderOperationTable() {
+  $("operationTable").innerHTML = OPERATIONS.map((op) => `
+    <tr data-op="${op.code}">
+      <td><code>${op.bits}</code></td>
+      <td>${op.name}</td>
+      <td><code>${op.expression}</code></td>
+      <td>${op.description}</td>
+    </tr>
+  `).join("");
+  document.querySelectorAll("#operationTable tr").forEach((row) => {
+    row.addEventListener("click", () => selectOperation(Number(row.dataset.op), true));
+  });
+  selectOperation(state.selectedOperation, false);
+}
+
+function selectOperation(code, notifyArduino) {
+  state.selectedOperation = Math.max(0, Math.min(7, code));
+  document.querySelectorAll("#operationTable tr").forEach((row) => {
+    row.classList.toggle("selected", Number(row.dataset.op) === state.selectedOperation);
+  });
+  const op = OPERATIONS[state.selectedOperation];
+  $("opBits").textContent = op.bits;
+  $("opName").textContent = op.name;
+  $("opExpression").textContent = op.expression;
+  if (notifyArduino) sendCommand(`OP:${state.selectedOperation}`);
+}
+
+function renderFlagDescriptions() {
+  const aluFlags = [
+    ["Z", "Zero: resultado igual a 0"],
+    ["C", "Carry/borrow: vai-um ou emprestimo"],
+    ["N", "Negativo: bit 3 do resultado ligado"],
+    ["V", "Overflow: multiplicacao passou de 4 bits"],
+    ["D", "Divisao por zero"],
+  ];
+  $("aluFlagDescriptions").innerHTML = aluFlags
+    .map(([name, text]) => `<span><b>${name}</b>${text}</span>`)
+    .join("");
+
+  const sregFlags = [
+    ["I", "Global interrupt enable"],
+    ["T", "Bit copy storage"],
+    ["H", "Half carry"],
+    ["S", "Sign"],
+    ["V", "Two's complement overflow"],
+    ["N", "Negative"],
+    ["Z", "Zero"],
+    ["C", "Carry"],
+  ];
+  $("sregFlagDescriptions").innerHTML = sregFlags
+    .map(([name, text]) => `<span><b>${name}</b>${text}</span>`)
+    .join("");
 }
 
 function selectView(view) {
@@ -230,6 +326,116 @@ function selectView(view) {
   document.querySelectorAll(".tab-panel").forEach((panel) => {
     panel.classList.toggle("active", panel.id === `view-${view}`);
   });
+}
+
+async function runDecimalOperation() {
+  const a = readNibbleInput("decimalA");
+  const b = readNibbleInput("decimalB");
+  if (a === null || b === null) {
+    $("smartStatus").textContent = "Use valores de 0 a 15.";
+    return;
+  }
+  await executeOperation(a, b, state.selectedOperation);
+}
+
+async function executeOperation(a, b, op) {
+  selectOperation(op, false);
+  if (state.simulate) {
+    renderSimulatedOperation(a, b, op);
+    return;
+  }
+  await sendCommand(`RUN:${a}:${b}:${op}`);
+}
+
+function renderSimulatedOperation(a, b, op) {
+  const result = executeOp(a, b, op);
+  const flags = makeFlags(a, b, op, result);
+  const sram = new Uint8Array(128);
+  sram[0] = a;
+  sram[1] = b;
+  sram[2] = op;
+  sram[3] = result;
+  sram[4] = flags;
+  for (let i = 5; i < 128; i++) sram[i] = (i * 13 + result * 17) & 255;
+  renderFrame({
+    seq: state.frame ? state.frame.seq + 1 : 1,
+    millis: Date.now() % 1000000,
+    ula: { a, b, op, result, flags, stage: 3, input: 0 },
+    ports: {
+      B: { ddr: 0x0f, port: result, pin: 0xff },
+      C: { ddr: 0x00, port: 0x00, pin: 0 },
+      D: { ddr: 0x7c, port: (result << 3) & 0x78, pin: 0xff },
+    },
+    sreg: flags,
+    timers: {},
+    adc: { a0: Math.floor(state.gameTarget * 1023), millivolts: Math.floor(state.gameTarget * 5000) },
+    sram,
+  });
+}
+
+function parseSmartCommand(text) {
+  const normalized = text.toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[;,]/g, " depois ");
+  const chunks = normalized.split(/\bdepois\b/).map((part) => part.trim()).filter(Boolean).slice(0, 3);
+  return chunks.map(parseSmartChunk).filter(Boolean);
+}
+
+function parseSmartChunk(chunk) {
+  const operationPatterns = [
+    [4, /\b(soma|somar|add|adicao)\b/],
+    [5, /\b(subtrai|subtrair|subtracao)\b/],
+    [3, /\bxor\b/],
+    [0, /\b(and|e logico)\b/],
+    [1, /\b(or|ou logico)\b/],
+    [6, /\b(multiplica|multiplicar|vezes)\b/],
+    [7, /\b(divide|dividir|divisao)\b/],
+    [2, /\b(not b|nega b|inverte b)\b/],
+  ];
+  const match = operationPatterns.find(([, pattern]) => pattern.test(chunk));
+  if (!match) return null;
+  const numbers = [...chunk.matchAll(/\b(1[0-5]|[0-9])\b/g)].map((item) => Number(item[1]));
+  if (match[0] === 2) {
+    return numbers.length >= 1 ? { op: 2, a: 0, b: numbers[0] } : null;
+  }
+  return numbers.length >= 2 ? { op: match[0], a: numbers[0], b: numbers[1] } : null;
+}
+
+async function runSmartCommand() {
+  if (state.smartRunning) return;
+  const operations = parseSmartCommand($("smartCommand").value);
+  if (!operations.length) {
+    $("smartStatus").textContent = "Nao entendi. Ex.: soma 3 e 4.";
+    return;
+  }
+
+  state.smartRunning = true;
+  $("smartStatus").textContent = `Executando ${operations.length} operacao(oes)...`;
+  for (let index = 0; index < operations.length; index++) {
+    const item = operations[index];
+    await executeOperation(item.a, item.b, item.op);
+    $("smartStatus").textContent = `${OPERATIONS[item.op].name} ${item.a}, ${item.b}`;
+    if (index < operations.length - 1) {
+      await blinkForSequence();
+      await wait(3000);
+    }
+  }
+  $("smartStatus").textContent = "Sequencia concluida.";
+  state.smartRunning = false;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function blinkForSequence() {
+  for (let i = 0; i < 3; i++) {
+    document.body.classList.add("sequence-blink");
+    await wait(180);
+    document.body.classList.remove("sequence-blink");
+    await wait(180);
+  }
 }
 
 function makePort(port) {
@@ -275,10 +481,22 @@ async function connectSerial() {
   }
 }
 
-function connectBridge() {
+async function connectBridge() {
   if (state.eventSource) {
     state.eventSource.close();
     state.eventSource = null;
+  }
+
+  try {
+    const response = await fetch(`${state.bridgeBase}/api/status`);
+    const status = await response.json();
+    if (!status.serial_connected) {
+      setStatus(`${t("bridgeNoSerial")}: ${status.error || state.bridgeBase}`, false);
+      return;
+    }
+  } catch (error) {
+    setStatus(`${t("bridgeFailed")}: ${state.bridgeBase}`, false);
+    return;
   }
 
   const source = new EventSource(`${state.bridgeBase}/api/events`);
@@ -324,8 +542,13 @@ async function readLoop() {
 }
 
 function handleLine(line) {
+  const start = line.indexOf("{");
+  if (start < 0) return;
+  const jsonText = line.slice(start).trim();
+  if (!jsonText) return;
+
   try {
-    const payload = JSON.parse(line);
+    const payload = JSON.parse(jsonText);
     if (payload.protocol !== PROTOCOL_VERSION) return;
     if (payload.type === "snapshot") renderFrame(normalizeSnapshot(payload));
     if (payload.type === "memory") {
@@ -337,7 +560,8 @@ function handleLine(line) {
     }
     if (payload.type === "hello") setStatus(`${payload.device} / fw ${payload.firmware}`, true);
   } catch (error) {
-    setStatus(`${t("ignoredLine")}: ${error.message}`, false);
+    // Serial can start mid-line right after opening. Ignore malformed fragments silently.
+    return;
   }
 }
 
@@ -357,11 +581,15 @@ function normalizeSnapshot(payload) {
 async function sendCommand(command) {
   pulseCommand(command);
   if (state.bridgeConnected) {
-    await fetch(`${state.bridgeBase}/api/command`, {
+    const response = await fetch(`${state.bridgeBase}/api/command`, {
       method: "POST",
       headers: { "Content-Type": "text/plain" },
       body: command,
     });
+    if (!response.ok) {
+      const message = await response.text();
+      setStatus(`${t("bridgeFailed")}: ${message || response.status}`, false);
+    }
     return;
   }
   if (!state.writer) return;
@@ -402,6 +630,7 @@ function applyLanguage() {
   [...$("leds").children].forEach((led) => {
     led.title = `${t("ledCommand")} ${led.textContent}`;
   });
+  $("bridgeHelp").querySelector("span").textContent = t("bridgeHint");
   if (!state.connected) setStatus(state.simulate ? t("statusSim") : t("statusPaused"), state.simulate);
 }
 
@@ -417,16 +646,23 @@ function renderFrame(frame) {
   $("decA").textContent = ula.a;
   $("decB").textContent = ula.b;
   $("decR").textContent = ula.result;
-  $("opBits").textContent = OPS_BITS[ula.op] || "???";
-  $("opName").textContent = t("ops")[ula.op] || `OP ${ula.op}`;
+  selectOperation(ula.op || 0, false);
 
   FLAGS.forEach(([name, mask]) => $(`flag${name}`).classList.toggle("on", Boolean(ula.flags & mask)));
+  updateAluFlagDescriptions(ula.flags);
   renderLeds(ula, frame.ports?.D?.port);
   renderButtons(frame.ports?.B?.pin || 0, frame.ports?.D?.pin || 0);
   renderPorts(frame.ports || {});
   renderSreg(frame.sreg || 0);
   renderTimers(frame.timers || {}, frame.adc || {});
   renderSram(frame.sram);
+}
+
+function updateAluFlagDescriptions(flags) {
+  [...$("aluFlagDescriptions").children].forEach((node, index) => {
+    const mask = FLAGS[index][1];
+    node.classList.toggle("on", Boolean(flags & mask));
+  });
 }
 
 function renderSreg(value) {
@@ -455,6 +691,27 @@ function renderTimers(timers, adc) {
   const millivolts = adc.millivolts || 0;
   $("adcValue").textContent = `${adcValue} / ${millivolts} mV`;
   $("adcMeter").style.width = `${Math.max(0, Math.min(100, (adcValue / 1023) * 100))}%`;
+  renderPotGame(adcValue);
+}
+
+function renderPotGame(adcValue) {
+  const position = Math.max(0, Math.min(1, adcValue / 1023));
+  const player = $("gamePlayer");
+  const target = $("gameTarget");
+  player.style.left = `${position * 100}%`;
+  target.style.left = `${state.gameTarget * 100}%`;
+
+  const now = performance.now();
+  if (Math.abs(position - state.gameTarget) < 0.045 && now - state.gameLastHitAt > 650) {
+    state.gameScore += 1;
+    state.gameLastHitAt = now;
+    state.gameTarget = 0.08 + Math.random() * 0.84;
+    $("gameLane").animate(
+      [{ boxShadow: "0 0 0 0 rgba(59,238,122,0)" }, { boxShadow: "0 0 0 3px rgba(59,238,122,0.75)" }, { boxShadow: "0 0 0 0 rgba(59,238,122,0)" }],
+      { duration: 420, easing: "ease-out" }
+    );
+  }
+  $("gameScore").textContent = state.gameScore;
 }
 
 function renderInputNibble() {
@@ -608,6 +865,19 @@ function simulateTick() {
       C: { ddr: 0x00, port: 0x00, pin: (t >> 4) & 255 },
       D: { ddr: 0x7c, port: (result << 3) & 255, pin: 0xff ^ (((t >> 8) & 1) << 7) },
     },
+    sreg: flags,
+    timers: {
+      tcnt0: (t >> 2) & 255,
+      tcnt1: t & 65535,
+      tcnt2: (t >> 3) & 255,
+      tccr0a: 3,
+      tccr0b: 3,
+      tccr1a: 0,
+      tccr1b: 1,
+      tccr2a: 0,
+      tccr2b: 4,
+    },
+    adc: { a0: adcA0, millivolts: Math.round((adcA0 * 5000) / 1023) },
     sram,
   });
   if (Math.floor(t / 2000) % 2 === 0) {
@@ -639,35 +909,5 @@ function makeFlags(a, b, op, result) {
   return flags;
 }
 
-function animateBus() {
-  const canvas = $("busCanvas");
-  const ctx = canvas.getContext("2d");
-  const resize = () => {
-    canvas.width = Math.floor(innerWidth * devicePixelRatio);
-    canvas.height = Math.floor(innerHeight * devicePixelRatio);
-  };
-  resize();
-  addEventListener("resize", resize);
-  function draw(now) {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.lineWidth = devicePixelRatio;
-    for (let y = 60; y < canvas.height; y += 58 * devicePixelRatio) {
-      ctx.beginPath();
-      ctx.strokeStyle = `rgba(0, 217, 255, ${0.06 + 0.05 * Math.sin(now / 600 + y)})`;
-      for (let x = -80 * devicePixelRatio; x < canvas.width + 80; x += 40 * devicePixelRatio) {
-        const yy = y + Math.sin(now / 500 + x / 120) * 8 * devicePixelRatio;
-        if (x < 0) ctx.moveTo(x, yy); else ctx.lineTo(x, yy);
-      }
-      ctx.stroke();
-      const pulseX = ((now / 2 + y) % (canvas.width + 180 * devicePixelRatio)) - 90 * devicePixelRatio;
-      ctx.fillStyle = "rgba(59, 238, 122, 0.55)";
-      ctx.fillRect(pulseX, y - 2 * devicePixelRatio, 26 * devicePixelRatio, 4 * devicePixelRatio);
-    }
-    requestAnimationFrame(draw);
-  }
-  requestAnimationFrame(draw);
-}
-
 initUi();
-animateBus();
 setInterval(simulateTick, 100);

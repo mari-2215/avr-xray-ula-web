@@ -27,6 +27,8 @@ http://localhost:8765
 
 Click **API local / Local API**. The browser will read Arduino `snapshot` and `memory` frames through Server-Sent Events and send commands through `POST /api/command`.
 
+The `--serial` value is the Arduino device, not the browser HTTP port. Common Linux values are `/dev/ttyACM0` and `/dev/ttyUSB0`. You can run `python bridge.py` without `--serial` to try auto-detection, but using the explicit device is more reliable.
+
 ## Notes
 
 - Web Serial does not work from a plain `file://` URL.

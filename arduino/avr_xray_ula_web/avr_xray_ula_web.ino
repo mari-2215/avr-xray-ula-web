@@ -76,6 +76,7 @@ void pressBit1();
 void pressBit0();
 void pressOk();
 void toggleInputBit(uint8_t bit);
+void runOperation(uint8_t a, uint8_t b, uint8_t operation);
 void executeUla();
 void writeLeds(uint8_t value, bool carry);
 void writeCurrentStageLeds();
@@ -196,6 +197,18 @@ void toggleInputBit(uint8_t bit) {
 
   currentInput ^= (1 << bit);
   writeLeds(currentInput, false);
+}
+
+void runOperation(uint8_t a, uint8_t b, uint8_t operation) {
+  operandA = a & 0x0F;
+  operandB = b & 0x0F;
+  operationCode = operation & 0x07;
+  currentInput = 0;
+  executeUla();
+  inputStage = STAGE_RESULT;
+  writeLeds(resultValue, (ulaFlags & FLAG_CARRY) != 0);
+  persistOperation();
+  appendProbeHistory();
 }
 
 void pressOk() {
@@ -446,6 +459,31 @@ void handleCommand() {
       currentInput = atoi(commandBuffer + 6) & 0x0F;
       writeLeds(currentInput, false);
     }
+    return;
+  }
+
+  if (strncmp(commandBuffer, "OP:", 3) == 0) {
+    operationCode = atoi(commandBuffer + 3) & 0x07;
+    if (inputStage == STAGE_INPUT_OPERATION) {
+      currentInput = operationCode;
+      writeLeds(currentInput, false);
+    }
+    return;
+  }
+
+  if (strncmp(commandBuffer, "RUN:", 4) == 0) {
+    char *cursor = commandBuffer + 4;
+    char *first = strchr(cursor, ':');
+    if (first == NULL) {
+      return;
+    }
+    *first = '\0';
+    char *second = strchr(first + 1, ':');
+    if (second == NULL) {
+      return;
+    }
+    *second = '\0';
+    runOperation(atoi(cursor), atoi(first + 1), atoi(second + 1));
     return;
   }
 

@@ -33,6 +33,11 @@
         </section>
       </header>
 
+      <section class="bridge-help" id="bridgeHelp">
+        <strong>Firefox/Linux</strong>
+        <span>Rode <code>python bridge.py --serial /dev/ttyACM0</code> e clique em <b>API local</b>.</span>
+      </section>
+
       <nav class="tabs" aria-label="AVR X-Ray views">
         <button class="view-tab active" data-view="overview" data-i18n="tabOverview">Visao Geral</button>
         <button class="view-tab" data-view="sreg" data-i18n="tabSreg">SREG</button>
@@ -61,16 +66,11 @@
                 <strong id="valueA">0000</strong>
                 <small id="decA">0</small>
               </div>
-              <div class="operator">
-                <span id="opBits">000</span>
-                <strong id="opName">AND</strong>
-              </div>
               <div class="operand" data-name="B">
                 <span>B</span>
                 <strong id="valueB">0000</strong>
                 <small id="decB">0</small>
               </div>
-              <div class="equals">=</div>
               <div class="operand result" data-name="R">
                 <span>R</span>
                 <strong id="valueR">0000</strong>
@@ -78,7 +78,14 @@
               </div>
             </div>
 
+            <div class="operation-strip">
+              <span id="opBits">000</span>
+              <strong id="opName">AND</strong>
+              <small id="opExpression">A &amp; B</small>
+            </div>
+
             <div class="flag-row" id="flagRow"></div>
+            <div class="flag-help" id="aluFlagDescriptions"></div>
 
             <div class="bit-console">
               <div class="bit-input">
@@ -90,6 +97,44 @@
                 <button id="okBtn" class="ghost">OK</button>
                 <button id="staticBtn" class="ghost">GET_STATIC</button>
               </div>
+            </div>
+
+            <div class="quick-inputs">
+              <div>
+                <p class="eyebrow">Entrada decimal</p>
+                <label>A <input id="decimalA" type="number" min="0" max="15" value="3" /></label>
+                <span id="decimalABits">0011</span>
+                <label>B <input id="decimalB" type="number" min="0" max="15" value="4" /></label>
+                <span id="decimalBBits">0100</span>
+                <button id="runDecimalBtn" class="primary">Executar</button>
+              </div>
+              <div>
+                <p class="eyebrow">Comando inteligente</p>
+                <input id="smartCommand" type="text" placeholder="soma 3 e 4, depois xor 5 e 1" />
+                <button id="smartRunBtn" class="ghost">Interpretar</button>
+                <small id="smartStatus">Aguardando comando.</small>
+              </div>
+            </div>
+
+            <div class="operation-table-wrap">
+              <p class="eyebrow">Tabela de operacoes da ULA</p>
+              <table class="operation-table">
+                <thead>
+                  <tr>
+                    <th>Codigo</th>
+                    <th>Nome</th>
+                    <th>Expressao</th>
+                    <th>Descricao</th>
+                  </tr>
+                </thead>
+                <tbody id="operationTable"></tbody>
+              </table>
+            </div>
+
+            <div class="explain-grid">
+              <span><b>ULA</b> e a unidade logica e aritmetica: recebe A, B e um codigo de operacao.</span>
+              <span><b>Interface</b> envia sinais pela API serial e tambem le botoes/LEDs fisicos nos snapshots.</span>
+              <span><b>EEPROM</b> recebe um log quando uma operacao e executada pelo OK ou pela UI.</span>
             </div>
           </article>
 
@@ -136,6 +181,7 @@
               <strong id="sregValue">0x00</strong>
             </div>
             <div class="flag-row sreg-grid" id="sregFlags"></div>
+            <div class="flag-help" id="sregFlagDescriptions"></div>
           </article>
 
           <article class="panel">
@@ -147,6 +193,16 @@
               <strong id="adcValue">0 / 0 mV</strong>
             </div>
             <div class="meter"><span id="adcMeter"></span></div>
+            <div class="pot-game">
+              <div class="game-head">
+                <span>Pot Racer</span>
+                <strong id="gameScore">0</strong>
+              </div>
+              <div class="game-lane" id="gameLane">
+                <span id="gameTarget"></span>
+                <i id="gamePlayer"></i>
+              </div>
+            </div>
           </article>
         </section>
       </section>
@@ -160,6 +216,11 @@
             </div>
           </div>
           <div class="ports" id="ports"></div>
+          <div class="explain-grid">
+            <span><b>DDR</b> define se cada pino trabalha como entrada ou saida.</span>
+            <span><b>PORT</b> mostra o nivel escrito nos pinos de saida ou pull-up nas entradas.</span>
+            <span><b>PIN</b> mostra o nivel eletrico lido no momento, incluindo botoes fisicos.</span>
+          </div>
         </article>
       </section>
 
@@ -172,6 +233,11 @@
             </div>
           </div>
           <div class="timer-grid" id="timers"></div>
+          <div class="explain-grid">
+            <span><b>TCNT</b> sao contadores internos dos timers do ATmega328P.</span>
+            <span><b>TCCR</b> sao registradores de controle dos timers.</span>
+            <span><b>Leitura</b> e apenas observacao: a interface nao reconfigura os timers.</span>
+          </div>
         </article>
       </section>
 
@@ -187,6 +253,11 @@
             </div>
             <div class="heatmap" id="sramMap"></div>
             <div class="inspector" id="inspector"></div>
+            <div class="explain-grid">
+              <span><b>SRAM</b> e a memoria viva do programa. A janela `ula_probe` expõe 128 bytes instrumentados.</span>
+              <span><b>EEPROM</b> guarda o historico circular das operacoes mesmo apos desligar.</span>
+              <span><b>FLASH</b> mostra uma janela diagnostica da memoria de programa.</span>
+            </div>
           </article>
 
           <article class="panel">

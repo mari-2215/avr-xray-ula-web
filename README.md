@@ -9,6 +9,8 @@
 - Arduino firmware: `arduino/avr_xray_ula_web/avr_xray_ula_web.ino`.
 - Bilingual Web Serial dashboard: `web/index.html`.
 - Physical and virtual ALU input.
+- Mouse-selectable operation table, decimal inputs and a small natural-language command runner for ALU sequences.
+- Potentiometer game driven by ADC A0, with simulator fallback.
 - Output LEDs driven by the ALU, with temporary web LED override commands.
 - Live X-Ray snapshots for ALU state, ports, timers, SREG, ADC and SRAM probe.
 - EEPROM circular log with 32 confirmed ALU operations.
@@ -72,9 +74,21 @@ python bridge.py --serial /dev/ttyACM0
 
 Open `http://localhost:8765` and click **API local / Local API**.
 
+On Linux, the Arduino serial device is usually `/dev/ttyACM0` or `/dev/ttyUSB0`. You can try auto-detection with:
+
+```bash
+python bridge.py
+```
+
+If the page says the local API is open but has no serial connection, restart the bridge with the explicit Arduino device:
+
+```bash
+python bridge.py --serial /dev/ttyACM0
+```
+
 ## Requirements checklist
 
-- Dynamic web interface: animated dashboard with live tabs for ULA, SREG, ports, timers and memory.
+- Dynamic web interface: responsive dashboard with live tabs for ULA, SREG, ports, timers and memory.
 - ULA access: live operands, operation, result, flags and workflow stage are read from Arduino snapshots.
 - Dump access: SRAM, EEPROM and FLASH are rendered in the memory tab.
 - API usage: Chrome/Edge can use Web Serial directly; Firefox/Linux can use the local HTTP/SSE API bridge.
@@ -117,6 +131,8 @@ Web to Arduino:
 - `GET_STATIC`
 - `INPUT:0..15`
 - `OK`
+- `OP:0..7`
+- `RUN:A:B:OP`
 - `PRESS:B3`, `PRESS:B2`, `PRESS:B1`, `PRESS:B0`, `PRESS:OK`
 - `LED:CARRY:0|1`, `LED:B3:0|1`, `LED:B2:0|1`, `LED:B1:0|1`, `LED:B0:0|1`
 - `LED_AUTO`

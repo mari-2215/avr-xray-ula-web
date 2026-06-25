@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import queue
 import threading
@@ -11,8 +12,10 @@ from typing import ClassVar
 
 try:
     import serial
+    from serial.tools import list_ports
 except ImportError:  # pragma: no cover - depends on the local machine
     serial = None
+    list_ports = None
 
 
 class SerialHub:
@@ -21,12 +24,16 @@ class SerialHub:
         self.clients_lock = threading.Lock()
         self.serial_lock = threading.Lock()
         self.serial_port = None
+        self.serial_device = ""
+        self.error = ""
 
     def attach_serial(self, device: str, baud: int) -> None:
         if serial is None:
             raise RuntimeError("pyserial is not installed. Run: python -m pip install pyserial")
 
         self.serial_port = serial.Serial(device, baudrate=baud, timeout=0.25)
+        self.serial_device = device
+        self.error = ""
         thread = threading.Thread(target=self._read_serial, daemon=True)
         thread.start()
 
@@ -42,7 +49,7 @@ class SerialHub:
 
     def send_command(self, command: str) -> None:
         if self.serial_port is None:
-            raise RuntimeError("Serial port is not open.")
+            raise RuntimeError(self.error or "Serial port is not open.")
         payload = (command.strip() + "\n").encode("ascii")
         with self.serial_lock:
             self.serial_port.write(payload)
@@ -64,6 +71,14 @@ class SerialHub:
         for client in clients:
             client.put(message)
 
+    def status(self) -> dict[str, object]:
+        return {
+            "serial_connected": self.serial_port is not None,
+            "serial_device": self.serial_device,
+            "error": self.error,
+            "ports": list_serial_ports(),
+        }
+
 
 class BridgeHandler(SimpleHTTPRequestHandler):
     hub: ClassVar[SerialHub]
@@ -81,6 +96,9 @@ class BridgeHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/api/events":
             self._handle_events()
+            return
+        if self.path == "/api/status":
+            self._handle_status()
             return
         super().do_GET()
 
@@ -124,10 +142,50 @@ class BridgeHandler(SimpleHTTPRequestHandler):
         finally:
             self.hub.remove_client(client)
 
+    def _handle_status(self) -> None:
+        payload = json.dumps(self.hub.status()).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+
+def list_serial_ports() -> list[dict[str, str]]:
+    if list_ports is None:
+        return []
+    return [
+        {
+            "device": port.device,
+            "description": port.description,
+            "hwid": port.hwid,
+        }
+        for port in list_ports.comports()
+    ]
+
+
+def choose_serial_port(explicit: str | None) -> str | None:
+    if explicit:
+        return explicit
+    ports = list_serial_ports()
+    if not ports:
+        return None
+    arduino_ports = [
+        port["device"]
+        for port in ports
+        if "arduino" in f"{port['description']} {port['hwid']}".lower()
+        or "ttyacm" in port["device"].lower()
+    ]
+    if len(arduino_ports) == 1:
+        return arduino_ports[0]
+    if len(ports) == 1:
+        return ports[0]["device"]
+    return None
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="AVR X-Ray ULA Web local serial API bridge")
-    parser.add_argument("--serial", required=True, help="Arduino serial device, e.g. COM3 or /dev/ttyACM0")
+    parser.add_argument("--serial", help="Arduino serial device, e.g. COM3 or /dev/ttyACM0")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--http-port", type=int, default=8765)
@@ -136,12 +194,26 @@ def main() -> None:
     os.chdir(Path(__file__).resolve().parent)
 
     hub = SerialHub()
-    hub.attach_serial(args.serial, args.baud)
+    serial_device = choose_serial_port(args.serial)
+    if serial_device:
+        try:
+            hub.attach_serial(serial_device, args.baud)
+        except Exception as exc:
+            hub.error = str(exc)
+    else:
+        ports = ", ".join(port["device"] for port in list_serial_ports()) or "none"
+        hub.error = (
+            "Serial port was not provided and could not be auto-detected. "
+            f"Run with --serial /dev/ttyACM0 or --serial COM3. Available ports: {ports}"
+        )
     BridgeHandler.hub = hub
 
     server = ThreadingHTTPServer((args.host, args.http_port), BridgeHandler)
     print(f"AVR X-Ray ULA Web bridge: http://{args.host}:{args.http_port}")
-    print(f"Serial: {args.serial} @ {args.baud}")
+    if hub.serial_port is None:
+        print(f"Serial: not connected - {hub.error}")
+    else:
+        print(f"Serial: {hub.serial_device} @ {args.baud}")
     server.serve_forever()
 
 

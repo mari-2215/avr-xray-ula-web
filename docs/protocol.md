@@ -66,6 +66,8 @@ Sent at startup and when `GET_STATIC` is received.
 | `GET_STATIC` | Resend EEPROM and FLASH dump |
 | `INPUT:0..15` | Replace current virtual nibble |
 | `OK` | Confirm the current ALU stage |
+| `OP:0..7` | Select operation code without blocking physical buttons |
+| `RUN:A:B:OP` | Execute one ALU operation from the web UI, persist it in EEPROM, and show the result |
 | `PRESS:B3` / `PRESS:B2` / `PRESS:B1` / `PRESS:B0` | Simulate a physical bit-button press |
 | `PRESS:OK` | Simulate physical OK |
 | `LED:CARRY:0|1` | Temporarily override carry LED |
