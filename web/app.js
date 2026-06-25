@@ -350,7 +350,10 @@ async function runDecimalOperation() {
 async function executeOperation(a, b, op) {
   selectOperation(op, false);
   if (state.simulate) {
+    state.simulate = false;
+    $("simBtn").classList.remove("active");
     renderSimulatedOperation(a, b, op);
+    setStatus("Resultado simulado", true);
     return;
   }
   if (state.commandMode === "direct") {
@@ -922,6 +925,7 @@ function simulateTick() {
   const op = (t >> 10) & 7;
   const result = executeOp(a, b, op);
   const flags = makeFlags(a, b, op, result);
+  const adcA0 = Math.round((Math.sin(t / 850) * 0.5 + 0.5) * 1023);
   const sram = new Uint8Array(128);
   sram[0] = a; sram[1] = b; sram[2] = op; sram[3] = result; sram[4] = flags; sram[5] = (t >> 5) & 255;
   for (let i = 6; i < 128; i++) sram[i] = (Math.sin((t / 260) + i * 0.37) * 92 + 128) & 255;
