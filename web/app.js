@@ -11,6 +11,7 @@ const COPY = {
     bridgeNoSerial: "API local aberta, mas sem serial",
     connectFailed: "Falha ao conectar",
     noConnection: "Sem conexao real com o Arduino",
+    noRx: "Conectado, mas sem dados do Arduino",
     serialStopped: "Serial interrompido",
     brandEyebrow: "Arduino Uno / ATmega328P",
     connect: "Conectar",
@@ -50,6 +51,7 @@ const COPY = {
     bridgeNoSerial: "Local API open, but no serial",
     connectFailed: "Connection failed",
     noConnection: "No real Arduino connection",
+    noRx: "Connected, but no Arduino data",
     serialStopped: "Serial stopped",
     brandEyebrow: "Arduino Uno / ATmega328P",
     connect: "Connect",
@@ -133,6 +135,7 @@ const state = {
   firmware: "",
   rxCount: 0,
   lastRxAt: 0,
+  rxWatchdog: 0,
   operationLog: [],
   lastLoggedSignature: "",
   lastFrameStage: null,
@@ -525,10 +528,13 @@ async function connectSerial() {
     state.connected = true;
     state.bridgeConnected = false;
     state.simulate = false;
+    state.rxCount = 0;
+    state.lastRxAt = 0;
     $("simBtn").classList.remove("active");
     setStatus(t("serialConnected"), true);
     readLoop();
     requestStaticAfterConnect();
+    startRxWatchdog();
   } catch (error) {
     setStatus(`${t("connectFailed")}: ${error.message}`, false);
   }
@@ -559,10 +565,13 @@ async function connectBridge() {
     state.connected = true;
     state.bridgeConnected = true;
     state.simulate = false;
+    state.rxCount = 0;
+    state.lastRxAt = 0;
     $("simBtn").classList.remove("active");
     $("bridgeBtn").classList.add("active");
     setStatus(t("bridgeConnected"), true);
     requestStaticAfterConnect();
+    startRxWatchdog();
   };
 
   source.onmessage = (event) => {
@@ -583,6 +592,16 @@ function requestStaticAfterConnect() {
       if (state.connected || state.bridgeConnected) sendCommand("GET_STATIC");
     }, delay);
   });
+}
+
+function startRxWatchdog() {
+  clearTimeout(state.rxWatchdog);
+  state.rxWatchdog = setTimeout(() => {
+    const hasConnection = state.connected || state.bridgeConnected;
+    if (hasConnection && !state.simulate && !state.lastRxAt) {
+      setStatus(`${t("noRx")}: verifique porta, upload do sketch e Serial Monitor fechado`, false);
+    }
+  }, 4200);
 }
 
 async function readLoop() {
