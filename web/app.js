@@ -38,7 +38,7 @@ const COPY = {
     ops: ["AND", "OR", "NOT B", "XOR", "ADD", "SUB", "MUL", "DIV"],
     sramHistory: "Historico circular da ULA, slot",
     sramDefault: "Byte instrumentado.",
-    bridgeHint: "Firefox/Linux: rode python bridge.py --serial /dev/ttyACM0 e clique em API local.",
+    bridgeHint: "Firefox/Linux: rode python bridge.py --serial /dev/ttyACM1 e clique em API local.",
   },
   en: {
     statusSim: "Simulator active",
@@ -78,7 +78,7 @@ const COPY = {
     ops: ["AND", "OR", "NOT B", "XOR", "ADD", "SUB", "MUL", "DIV"],
     sramHistory: "ALU circular history, slot",
     sramDefault: "Instrumented byte.",
-    bridgeHint: "Firefox/Linux: run python bridge.py --serial /dev/ttyACM0 and click Local API.",
+    bridgeHint: "Firefox/Linux: run python bridge.py --serial /dev/ttyACM1 and click Local API.",
   },
 };
 const OPS_BITS = ["000", "001", "010", "011", "100", "101", "110", "111"];
@@ -596,12 +596,25 @@ function requestStaticAfterConnect() {
 
 function startRxWatchdog() {
   clearTimeout(state.rxWatchdog);
-  state.rxWatchdog = setTimeout(() => {
+  state.rxWatchdog = setTimeout(async () => {
     const hasConnection = state.connected || state.bridgeConnected;
     if (hasConnection && !state.simulate && !state.lastRxAt) {
-      setStatus(`${t("noRx")}: verifique porta, upload do sketch e Serial Monitor fechado`, false);
+      const detail = await bridgePortDetail();
+      setStatus(`${t("noRx")}: ${detail || "verifique porta, upload do sketch e Serial Monitor fechado"}`, false);
     }
   }, 4200);
+}
+
+async function bridgePortDetail() {
+  if (!state.bridgeConnected) return "";
+  try {
+    const response = await fetch(`${state.bridgeBase}/api/status`);
+    const status = await response.json();
+    const available = (status.ports || []).map((port) => port.device).join(", ") || "nenhuma";
+    return `API em ${status.serial_device || "sem serial"}; portas: ${available}; tente --serial /dev/ttyACM1`;
+  } catch (error) {
+    return "";
+  }
 }
 
 async function readLoop() {

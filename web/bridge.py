@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import queue
+import re
 import threading
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -178,14 +179,21 @@ def choose_serial_port(explicit: str | None) -> str | None:
     ]
     if len(arduino_ports) == 1:
         return arduino_ports[0]
+    if len(arduino_ports) > 1:
+        return sorted(arduino_ports, key=serial_sort_key, reverse=True)[0]
     if len(ports) == 1:
         return ports[0]["device"]
     return None
 
 
+def serial_sort_key(device: str) -> tuple[int, str]:
+    match = re.search(r"(\d+)$", device)
+    return (int(match.group(1)) if match else -1, device)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="AVR X-Ray ULA Web local serial API bridge")
-    parser.add_argument("--serial", help="Arduino serial device, e.g. COM3 or /dev/ttyACM0")
+    parser.add_argument("--serial", help="Arduino serial device, e.g. COM3 or /dev/ttyACM1")
     parser.add_argument("--baud", type=int, default=115200)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--http-port", type=int, default=8765)
@@ -204,7 +212,7 @@ def main() -> None:
         ports = ", ".join(port["device"] for port in list_serial_ports()) or "none"
         hub.error = (
             "Serial port was not provided and could not be auto-detected. "
-            f"Run with --serial /dev/ttyACM0 or --serial COM3. Available ports: {ports}"
+            f"Run with --serial /dev/ttyACM1 or --serial COM3. Available ports: {ports}"
         )
     BridgeHandler.hub = hub
 
