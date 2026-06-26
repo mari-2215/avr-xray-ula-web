@@ -72,21 +72,21 @@ Firefox on Linux does not support Web Serial. For Firefox, run the local bridge:
 ```bash
 cd web
 python -m pip install pyserial
-python bridge.py --serial /dev/ttyACM1
+python bridge.py
 ```
 
 Open `http://localhost:8765` and click **API local / Local API**.
 
-On Linux, the Arduino serial device is usually `/dev/ttyACM0`, `/dev/ttyACM1` or `/dev/ttyUSB0`. You can try auto-detection with:
+On Linux, the Arduino serial device is usually `/dev/ttyACM0`, `/dev/ttyACM1` or `/dev/ttyUSB0`. The bridge probes serial ports and chooses the one that actually emits AVR X-Ray JSON. You can also force a port with:
+
+```bash
+python bridge.py --serial /dev/ttyACM0
+```
+
+If the page says the local API is open but has no Arduino data, close the old bridge and restart it without a fixed port:
 
 ```bash
 python bridge.py
-```
-
-If the page says the local API is open but has no serial connection, restart the bridge with the explicit Arduino device:
-
-```bash
-python bridge.py --serial /dev/ttyACM1
 ```
 
 If the status stays on `TX ...`, the browser sent a command but did not receive a firmware response. Check that the Arduino IDE Serial Monitor is closed, the selected device is the Uno, and the current sketch was uploaded.

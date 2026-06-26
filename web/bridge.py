@@ -6,6 +6,7 @@ import os
 import queue
 import re
 import threading
+import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import ClassVar
@@ -165,7 +166,7 @@ def list_serial_ports() -> list[dict[str, str]]:
     ]
 
 
-def choose_serial_port(explicit: str | None) -> str | None:
+def choose_serial_port(explicit: str | None, baud: int, probe_seconds: float) -> str | None:
     if explicit:
         return explicit
     ports = list_serial_ports()
@@ -177,12 +178,10 @@ def choose_serial_port(explicit: str | None) -> str | None:
         if "arduino" in f"{port['description']} {port['hwid']}".lower()
         or "ttyacm" in port["device"].lower()
     ]
-    if len(arduino_ports) == 1:
-        return arduino_ports[0]
-    if len(arduino_ports) > 1:
-        return sorted(arduino_ports, key=serial_sort_key, reverse=True)[0]
-    if len(ports) == 1:
-        return ports[0]["device"]
+    candidates = arduino_ports or [port["device"] for port in ports]
+    probed = probe_serial_ports(candidates, baud, probe_seconds)
+    if probed:
+        return probed
     return None
 
 
@@ -191,10 +190,51 @@ def serial_sort_key(device: str) -> tuple[int, str]:
     return (int(match.group(1)) if match else -1, device)
 
 
+def probe_serial_ports(devices: list[str], baud: int, probe_seconds: float) -> str | None:
+    if serial is None:
+        return None
+
+    for device in sorted(set(devices), key=serial_sort_key):
+        print(f"Probing serial {device}...", flush=True)
+        try:
+            with serial.Serial(device, baudrate=baud, timeout=0.2) as probe:
+                deadline = time.monotonic() + probe_seconds
+                while time.monotonic() < deadline:
+                    line = probe.readline()
+                    if not line:
+                        continue
+                    text = line.decode("ascii", errors="ignore").strip()
+                    if looks_like_xray_frame(text):
+                        print(f"Detected AVR X-Ray stream on {device}", flush=True)
+                        return device
+        except Exception as exc:
+            print(f"Skipping {device}: {exc}", flush=True)
+    return None
+
+
+def looks_like_xray_frame(text: str) -> bool:
+    start = text.find("{")
+    if start < 0:
+        return False
+    try:
+        payload = json.loads(text[start:])
+    except json.JSONDecodeError:
+        return False
+
+    if payload.get("device") == "AVR X-Ray ULA Web":
+        return True
+    if payload.get("type") == "snapshot" and "ula" in payload:
+        return True
+    if payload.get("type") == "memory" and "eeprom" in payload:
+        return True
+    return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="AVR X-Ray ULA Web local serial API bridge")
-    parser.add_argument("--serial", help="Arduino serial device, e.g. COM3 or /dev/ttyACM1")
+    parser.add_argument("--serial", help="Arduino serial device, e.g. COM3 or /dev/ttyACM0")
     parser.add_argument("--baud", type=int, default=115200)
+    parser.add_argument("--probe-seconds", type=float, default=4.0, help="Seconds to wait for AVR X-Ray JSON while auto-detecting")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--http-port", type=int, default=8765)
     args = parser.parse_args()
@@ -202,7 +242,7 @@ def main() -> None:
     os.chdir(Path(__file__).resolve().parent)
 
     hub = SerialHub()
-    serial_device = choose_serial_port(args.serial)
+    serial_device = choose_serial_port(args.serial, args.baud, args.probe_seconds)
     if serial_device:
         try:
             hub.attach_serial(serial_device, args.baud)
@@ -212,7 +252,7 @@ def main() -> None:
         ports = ", ".join(port["device"] for port in list_serial_ports()) or "none"
         hub.error = (
             "Serial port was not provided and could not be auto-detected. "
-            f"Run with --serial /dev/ttyACM1 or --serial COM3. Available ports: {ports}"
+            f"Run with --serial /dev/ttyACM0 or --serial /dev/ttyACM1. Available ports: {ports}"
         )
     BridgeHandler.hub = hub
 

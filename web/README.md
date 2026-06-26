@@ -16,7 +16,7 @@ Firefox on Linux does not support Web Serial. Use the local API bridge instead:
 
 ```bash
 python -m pip install pyserial
-python bridge.py --serial /dev/ttyACM1
+python bridge.py
 ```
 
 Then open:
@@ -27,7 +27,7 @@ http://localhost:8765
 
 Click **API local / Local API**. The browser will read Arduino `snapshot` and `memory` frames through Server-Sent Events and send commands through `POST /api/command`.
 
-The `--serial` value is the Arduino device, not the browser HTTP port. Common Linux values are `/dev/ttyACM0`, `/dev/ttyACM1` and `/dev/ttyUSB0`. You can run `python bridge.py` without `--serial` to try auto-detection, but using the explicit device is more reliable.
+The bridge probes available serial devices and chooses the port that emits AVR X-Ray JSON. If you need to force a device, the `--serial` value is the Arduino device, not the browser HTTP port. Common Linux values are `/dev/ttyACM0`, `/dev/ttyACM1` and `/dev/ttyUSB0`.
 
 ## Notes
 

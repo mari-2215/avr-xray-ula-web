@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>AVR X-Ray ULA Web</title>
-    <link rel="stylesheet" href="./styles.css?v=d022af4-rxfix" />
+    <link rel="stylesheet" href="./styles.css?v=autoprobe-bridge" />
   </head>
   <body>
     <canvas id="busCanvas" aria-hidden="true"></canvas>
@@ -35,7 +35,7 @@
 
       <section class="bridge-help" id="bridgeHelp">
         <strong>Firefox/Linux</strong>
-        <span>Rode <code>python bridge.py --serial /dev/ttyACM1</code> e clique em <b>API local</b>.</span>
+        <span>Rode <code>python bridge.py</code> e clique em <b>API local</b>. A ponte detecta ACM0/ACM1 pelo JSON do Arduino.</span>
       </section>
 
       <nav class="tabs" aria-label="AVR X-Ray views">
@@ -318,6 +318,6 @@
       </section>
     </main>
 
-    <script src="./app.js?v=d022af4-rxfix"></script>
+    <script src="./app.js?v=autoprobe-bridge"></script>
   </body>
 </html>

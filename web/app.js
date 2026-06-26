@@ -38,7 +38,7 @@ const COPY = {
     ops: ["AND", "OR", "NOT B", "XOR", "ADD", "SUB", "MUL", "DIV"],
     sramHistory: "Historico circular da ULA, slot",
     sramDefault: "Byte instrumentado.",
-    bridgeHint: "Firefox/Linux: rode python bridge.py --serial /dev/ttyACM1 e clique em API local.",
+    bridgeHint: "Firefox/Linux: rode python bridge.py e clique em API local. Ele detecta ACM0/ACM1 pelo JSON do Arduino.",
   },
   en: {
     statusSim: "Simulator active",
@@ -78,7 +78,7 @@ const COPY = {
     ops: ["AND", "OR", "NOT B", "XOR", "ADD", "SUB", "MUL", "DIV"],
     sramHistory: "ALU circular history, slot",
     sramDefault: "Instrumented byte.",
-    bridgeHint: "Firefox/Linux: run python bridge.py --serial /dev/ttyACM1 and click Local API.",
+    bridgeHint: "Firefox/Linux: run python bridge.py and click Local API. It detects ACM0/ACM1 from Arduino JSON.",
   },
 };
 const OPS_BITS = ["000", "001", "010", "011", "100", "101", "110", "111"];
@@ -611,7 +611,7 @@ async function bridgePortDetail() {
     const response = await fetch(`${state.bridgeBase}/api/status`);
     const status = await response.json();
     const available = (status.ports || []).map((port) => port.device).join(", ") || "nenhuma";
-    return `API em ${status.serial_device || "sem serial"}; portas: ${available}; tente --serial /dev/ttyACM1`;
+    return `API em ${status.serial_device || "sem serial"}; portas: ${available}; reinicie com python bridge.py para auto-detectar`;
   } catch (error) {
     return "";
   }
