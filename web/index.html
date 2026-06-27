@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AVR X-Ray ULA Web</title>
+    <link rel="stylesheet" href="./styles.css?v=autoprobe-bridge" />
+  </head>
+  <body>
+    <canvas id="busCanvas" aria-hidden="true"></canvas>
+
+    <main class="shell">
+      <header class="topbar">
+        <section class="brand">
+          <div class="mark">
+            <span></span><span></span><span></span><span></span>
+          </div>
+          <div>
+            <p class="eyebrow" data-i18n="brandEyebrow">Arduino Uno / ATmega328P</p>
+            <h1>AVR X-Ray ULA Web</h1>
+          </div>
+        </section>
+
+        <section class="connection">
+          <div class="status-pill" id="statusPill">
+            <i></i>
+            <span id="statusText">Pausado</span>
+          </div>
+          <button id="langBtn" class="ghost">EN</button>
+          <button id="connectBtn" class="primary" data-i18n="connect">Conectar</button>
+          <button id="bridgeBtn" class="ghost" data-i18n="bridge">API local</button>
+          <button id="simBtn" class="ghost" data-i18n="simulator">Simulador</button>
+        </section>
+      </header>
+
+      <section class="bridge-help" id="bridgeHelp">
+        <strong>Firefox/Linux</strong>
+        <span>Rode <code>python bridge.py</code> e clique em <b>API local</b>. A ponte detecta ACM0/ACM1 pelo JSON do Arduino.</span>
+      </section>
+
+      <nav class="tabs" aria-label="AVR X-Ray views">
+        <button class="view-tab active" data-view="overview" data-i18n="tabOverview">Visao Geral</button>
+        <button class="view-tab" data-view="sreg" data-i18n="tabSreg">SREG</button>
+        <button class="view-tab" data-view="ports" data-i18n="tabPorts">Portas</button>
+        <button class="view-tab" data-view="timers" data-i18n="tabTimers">Temporizadores</button>
+        <button class="view-tab" data-view="memory" data-i18n="tabMemory">Memoria</button>
+      </nav>
+
+      <section class="tab-panel active" id="view-overview">
+        <section class="hero-grid">
+          <article class="panel core-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow" data-i18n="aluFlow">Fluxo da ULA</p>
+                <h2 id="stageLabel">Entrada do operando A</h2>
+              </div>
+              <div class="sample">
+                <span id="seqLabel">seq 0000</span>
+                <span id="rateLabel">0 s</span>
+              </div>
+            </div>
+
+            <div class="alu-stage">
+              <div class="operand" data-name="A">
+                <span>A</span>
+                <strong id="valueA">0000</strong>
+                <small id="decA">0</small>
+              </div>
+              <div class="operand" data-name="B">
+                <span>B</span>
+                <strong id="valueB">0000</strong>
+                <small id="decB">0</small>
+              </div>
+              <div class="operand result" data-name="R">
+                <span>R</span>
+                <strong id="valueR">0000</strong>
+                <small id="decR">0</small>
+              </div>
+            </div>
+
+            <div class="operation-strip">
+              <span id="opBits">000</span>
+              <strong id="opName">AND</strong>
+              <small id="opExpression">A &amp; B</small>
+            </div>
+
+            <div class="flag-row" id="flagRow"></div>
+            <div class="flag-help" id="aluFlagDescriptions"></div>
+
+            <div class="bit-console">
+              <div class="bit-input">
+                <p class="eyebrow" data-i18n="sendSignal">Enviar sinal</p>
+                <div class="nibble" id="inputNibble"></div>
+              </div>
+              <div class="control-pad">
+                <button id="sendInputBtn" class="primary" data-i18n="sendInput">Enviar input</button>
+                <button id="okBtn" class="ghost">OK</button>
+                <button id="clearBtn" class="ghost">CLEAR</button>
+                <button id="staticBtn" class="ghost">GET_STATIC</button>
+              </div>
+            </div>
+
+            <div class="quick-inputs">
+              <div>
+                <p class="eyebrow">Entrada decimal</p>
+                <label>A <input id="decimalA" type="number" min="0" max="15" value="3" /></label>
+                <span id="decimalABits">0011</span>
+                <label>B <input id="decimalB" type="number" min="0" max="15" value="4" /></label>
+                <span id="decimalBBits">0100</span>
+                <button id="runDecimalBtn" class="primary">Executar</button>
+              </div>
+              <div>
+                <p class="eyebrow">Comando inteligente</p>
+                <input id="smartCommand" type="text" placeholder="soma 3 e 4, depois xor 5 e 1" />
+                <button id="smartRunBtn" class="ghost">Interpretar</button>
+                <small id="smartStatus">Aguardando comando.</small>
+              </div>
+            </div>
+
+            <div class="operation-table-wrap">
+              <p class="eyebrow">Tabela de operacoes da ULA</p>
+              <table class="operation-table">
+                <thead>
+                  <tr>
+                    <th>Codigo</th>
+                    <th>Nome</th>
+                    <th>Expressao</th>
+                    <th>Descricao</th>
+                  </tr>
+                </thead>
+                <tbody id="operationTable"></tbody>
+              </table>
+            </div>
+
+            <div class="explain-grid">
+              <span><b>ULA</b> e a unidade logica e aritmetica: recebe A, B e um codigo de operacao.</span>
+              <span><b>Interface</b> envia sinais pela API serial e tambem le botoes/LEDs fisicos nos snapshots.</span>
+              <span><b>EEPROM</b> recebe um log quando uma operacao e executada pelo OK ou pela UI.</span>
+            </div>
+          </article>
+
+          <article class="panel board-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow" data-i18n="physicalSignals">Sinais fisicos</p>
+                <h2 data-i18n="ledsButtons">LEDs e botoes</h2>
+              </div>
+            </div>
+
+            <div class="board-visual">
+              <div class="uno">
+                <div class="usb"></div>
+                <div class="chip"></div>
+                <div class="pinrail top"></div>
+                <div class="pinrail bottom"></div>
+                <div class="board-pin-row board-led-pins" aria-label="Pinos dos LEDs">
+                  <span id="boardLedCARRY">D2</span>
+                  <span id="boardLedB3">D3</span>
+                  <span id="boardLedB2">D4</span>
+                  <span id="boardLedB1">D5</span>
+                  <span id="boardLedB0">D6</span>
+                </div>
+                <div class="board-pin-row board-button-pins" aria-label="Pinos dos botoes">
+                  <span id="boardButton7">D7</span>
+                  <span id="boardButton8">D8</span>
+                  <span id="boardButton9">D9</span>
+                  <span id="boardButton10">D10</span>
+                  <span id="boardButton11">D11</span>
+                </div>
+                <span class="uno-label">UNO</span>
+              </div>
+            </div>
+
+            <div class="io-grid">
+              <div>
+                <p class="eyebrow" data-i18n="ledPins">LEDs D2-D6</p>
+                <div class="leds" id="leds"></div>
+              </div>
+              <div>
+                <p class="eyebrow" data-i18n="buttonPins">Botoes D7-D11</p>
+                <div class="buttons" id="buttons"></div>
+              </div>
+            </div>
+
+            <div class="operation-log">
+              <div class="panel-head compact">
+                <div>
+                  <p class="eyebrow">Log de operacoes</p>
+                  <h3>Historico ao vivo</h3>
+                </div>
+              </div>
+              <table class="log-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Origem</th>
+                    <th>A</th>
+                    <th>B</th>
+                    <th>OP</th>
+                    <th>R</th>
+                    <th>Flags</th>
+                  </tr>
+                </thead>
+                <tbody id="operationLog">
+                  <tr><td colspan="7">Aguardando operacoes.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </article>
+        </section>
+      </section>
+
+      <section class="tab-panel" id="view-sreg">
+        <section class="dashboard two">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">CPU</p>
+                <h2>SREG</h2>
+              </div>
+              <strong id="sregValue">0x00</strong>
+            </div>
+            <div class="flag-row sreg-grid" id="sregFlags"></div>
+            <div class="flag-help" id="sregFlagDescriptions"></div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">ADC</p>
+                <h2>A0</h2>
+              </div>
+              <strong id="adcValue">0 / 0 mV</strong>
+            </div>
+            <div class="meter"><span id="adcMeter"></span></div>
+            <div class="pot-game">
+              <div class="game-head">
+                <span>Pot Racer</span>
+                <strong id="gameScore">0</strong>
+                <button id="gameResetBtn" class="ghost small">Clear</button>
+              </div>
+              <div class="game-lane" id="gameLane">
+                <span id="gameTarget"></span>
+                <i id="gamePlayer"></i>
+              </div>
+            </div>
+          </article>
+        </section>
+      </section>
+
+      <section class="tab-panel" id="view-ports">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow" data-i18n="registers">Registradores</p>
+              <h2>Portas B / C / D</h2>
+            </div>
+          </div>
+          <div class="ports" id="ports"></div>
+          <div class="explain-grid">
+            <span><b>DDR</b> define se cada pino trabalha como entrada ou saida.</span>
+            <span><b>PORT</b> mostra o nivel escrito nos pinos de saida ou pull-up nas entradas.</span>
+            <span><b>PIN</b> mostra o nivel eletrico lido no momento, incluindo botoes fisicos.</span>
+          </div>
+        </article>
+      </section>
+
+      <section class="tab-panel" id="view-timers">
+        <article class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Timer0 / Timer1 / Timer2</p>
+              <h2 data-i18n="tabTimers">Temporizadores</h2>
+            </div>
+          </div>
+          <div class="timer-grid" id="timers"></div>
+          <div class="explain-grid">
+            <span><b>TCNT</b> sao contadores internos dos timers do ATmega328P.</span>
+            <span><b>TCCR</b> sao registradores de controle dos timers.</span>
+            <span><b>Leitura</b> e apenas observacao: a interface nao reconfigura os timers.</span>
+          </div>
+        </article>
+      </section>
+
+      <section class="tab-panel" id="view-memory">
+        <section class="dashboard memory">
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow" data-i18n="liveDump">Dump ao vivo</p>
+                <h2>SRAM ula_probe[128]</h2>
+              </div>
+              <strong id="selectedByte">0x00</strong>
+            </div>
+            <div class="heatmap" id="sramMap"></div>
+            <div class="inspector" id="inspector"></div>
+            <div class="explain-grid">
+              <span><b>SRAM</b> e a memoria viva do programa. A janela `ula_probe` expõe 128 bytes instrumentados.</span>
+              <span><b>EEPROM</b> guarda o historico circular das operacoes mesmo apos desligar.</span>
+              <span><b>FLASH</b> mostra uma janela diagnostica da memoria de programa.</span>
+            </div>
+          </article>
+
+          <article class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow" data-i18n="staticMemory">Memoria estatica</p>
+                <h2>EEPROM e FLASH</h2>
+              </div>
+            </div>
+            <div class="dump-tabs">
+              <button class="dump-tab active" data-dump="eeprom">EEPROM</button>
+              <button class="dump-tab" data-dump="flash">FLASH</button>
+            </div>
+            <pre id="dumpView"></pre>
+          </article>
+        </section>
+      </section>
+    </main>
+
+    <script src="./app.js?v=autoprobe-bridge"></script>
+  </body>
+</html>
